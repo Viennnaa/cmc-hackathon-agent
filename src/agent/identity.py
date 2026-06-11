@@ -31,7 +31,7 @@ AGENT_DESCRIPTION = (
 REPO_URL = "https://github.com/Viennnaa/cmc-hackathon-agent"
 
 
-def register() -> dict:
+def register(debug: bool = False) -> dict:
     if IDENTITY_PATH.exists():
         identity = json.loads(IDENTITY_PATH.read_text())
         print(f"already registered: agentId {identity['agentId']} "
@@ -45,8 +45,12 @@ def register() -> dict:
         raise SystemExit("WALLET_PASSWORD not set in .env (used to encrypt "
                          "the identity keystore in ~/.bnbagent/wallets/)")
 
+    if debug:
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+
     wallet = EVMWalletProvider(password=password)
-    sdk = ERC8004Agent(network="bsc-testnet", wallet_provider=wallet)
+    sdk = ERC8004Agent(network="bsc-testnet", wallet_provider=wallet, debug=debug)
     agent_uri = sdk.generate_agent_uri(
         name=AGENT_NAME,
         description=AGENT_DESCRIPTION,
@@ -72,6 +76,7 @@ def register() -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="ERC-8004 agent identity")
     parser.add_argument("--show", action="store_true", help="print saved identity")
+    parser.add_argument("--debug", action="store_true", help="verbose SDK/paymaster logging")
     args = parser.parse_args()
 
     if args.show:
@@ -80,7 +85,7 @@ def main() -> None:
         else:
             print("not registered yet — run: python -m agent.identity")
         return
-    register()
+    register(debug=args.debug)
 
 
 if __name__ == "__main__":
