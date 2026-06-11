@@ -63,6 +63,11 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
         journal.decision(sym, q, sig, verdict, fear_greed, portfolio.equity())
 
         if verdict.approved and verdict.action == "enter":
+            veto = executor.pre_entry_check(sym)
+            if veto:
+                journal.event("token_risk_veto", f"{sym}: {veto}", portfolio.equity())
+                log.warning("%s entry vetoed by token risk check: %s", sym, veto)
+                continue
             fill = executor.buy(portfolio, sym, verdict.size_usdt, q.price)
             journal.fill(fill)
             log.info("%s ENTER %.6f @ %.4f (%s)", sym, fill.qty, fill.price, sig.reason)
@@ -84,14 +89,22 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     settings = config.get_settings()
-    if settings.mode != "paper":
-        raise SystemExit("live mode not implemented yet — set AGENT_MODE=paper")
+    if settings.mode == "live":
+        from agent.execution.twak import TwakClient, TwakExecutor
+        client = TwakClient()
+        auth = client.auth_status()
+        wallet = client.wallet_status()
+        log.info("twak auth: %s | wallet: %s", auth, wallet)
+        executor = TwakExecutor(client)
+    elif settings.mode == "paper":
+        executor = PaperExecutor()
+    else:
+        raise SystemExit(f"unknown AGENT_MODE={settings.mode!r} — use paper or live")
 
     cmc = CMCClient(settings.cmc_api_key)
     store = PriceStore(PRICES_PATH)
     portfolio = Portfolio.load(PORTFOLIO_PATH, settings.starting_capital)
     risk = RiskEngine()
-    executor = PaperExecutor()
     journal = Journal(JOURNAL_PATH, LEDGER_PATH)
 
     log.info("starting in %s mode | capital %.2f USDT | universe %s | poll %ss",

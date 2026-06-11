@@ -23,6 +23,10 @@ class Fill:
 
 
 class PaperExecutor:
+    def pre_entry_check(self, symbol: str) -> str | None:
+        """Veto reason or None. Paper mode has no on-chain token risk to check."""
+        return None
+
     def buy(self, portfolio: Portfolio, symbol: str, size_usdt: float, quote_price: float) -> Fill:
         price = quote_price * (1 + config.PAPER_SLIPPAGE_PCT)
         fee = size_usdt * config.PAPER_FEE_PCT
