@@ -120,6 +120,10 @@ class RiskEngine:
             return Verdict(False, "none", "daily_halt", f"halted for another {remaining:.1f}h")
         if symbol in portfolio.positions:
             return Verdict(False, "none", "single_position", f"already holding {symbol}")
+        if len(portfolio.positions) >= config.MAX_CONCURRENT_POSITIONS:
+            return Verdict(False, "none", "max_concurrent",
+                           f"{len(portfolio.positions)} positions open >= "
+                           f"{config.MAX_CONCURRENT_POSITIONS} cap")
         since_exit = now - self.last_exit.get(symbol, float("-inf"))
         if since_exit < config.REENTRY_COOLDOWN_SECONDS:
             remaining = (config.REENTRY_COOLDOWN_SECONDS - since_exit) / 60

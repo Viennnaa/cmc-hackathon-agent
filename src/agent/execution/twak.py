@@ -24,17 +24,30 @@ from agent.execution.portfolio import Portfolio, Position
 CHAIN = "bsc"
 TWAK_CMD = ["twak"]  # assumes global install: npm install -g @trustwallet/cli
 
-# CMC symbol -> token symbol twak understands on BSC.
-# BTC trades as BTCB (Binance-pegged) on PancakeSwap.
-TOKEN_MAP = {"BNB": "BNB", "BTC": "BTCB", "ETH": "ETH", "USDT": "USDT"}
-
-# Trust Wallet asset IDs, verified live 2026-06-11: native BNB is c714, but
-# BEP-20 tokens use the legacy smartchain coin id c20000714_t<address>
+# Trust Wallet asset IDs (risk gate), verified live 2026-06-11: native BNB is
+# c714, but BEP-20 tokens use the legacy smartchain coin id c20000714_t<address>
 # (c714_t... returns TOKEN_NOT_FOUND). Addresses must keep EIP-55 checksum case.
 ASSET_IDS = {
     "BNB": "c714",
-    "BTC": "c20000714_t0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",  # BTCB
-    "ETH": "c20000714_t0x2170Ed0880ac9A755fd29B2688956BD959F933F8",  # BNB pegged ETH
+    "BTC": "c20000714_t0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",   # BTCB
+    "ETH": "c20000714_t0x2170Ed0880ac9A755fd29B2688956BD959F933F8",   # BNB pegged ETH
+    "SOL": "c20000714_t0x570A5D26f7765Ecb712C0924E4De545B89fD43dF",   # BNB pegged SOL
+    "XRP": "c20000714_t0x1D2F0da169ceB9fC7B3144628dB156f3F6c60dBE",   # BNB pegged XRP
+    "CAKE": "c20000714_t0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82",  # PancakeSwap (native BSC)
+}
+
+# CMC symbol -> identifier passed to `twak swap`, verified live 2026-06-11:
+# bare symbols are only reliable for USDT and native BNB. BEP-20 tokens MUST
+# use asset ids — symbol resolution is dangerous ("SOL" silently quoted BNB,
+# "CAKE" was unknown). Quotes for every entry below were verified by id.
+SWAP_IDS = {
+    "USDT": "USDT",
+    "BNB": "BNB",
+    "BTC": ASSET_IDS["BTC"],
+    "ETH": ASSET_IDS["ETH"],
+    "SOL": ASSET_IDS["SOL"],
+    "XRP": ASSET_IDS["XRP"],
+    "CAKE": ASSET_IDS["CAKE"],
 }
 
 
@@ -164,8 +177,8 @@ class TwakExecutor:
         return f"twak risk check flagged {symbol}: {level}"
 
     def buy(self, portfolio: Portfolio, symbol: str, size_usdt: float, quote_price: float) -> Fill:
-        token = TOKEN_MAP[symbol]
-        result = self.client.swap(size_usdt, TOKEN_MAP["USDT"], token)
+        token = SWAP_IDS[symbol]
+        result = self.client.swap(size_usdt, SWAP_IDS["USDT"], token)
         # TODO(verify): executed-swap response shape on the Day 8 dry run;
         # quote-only confirmed to use "output". Fall back to minReceived.
         qty = _amount(result.get("output") or result.get("minReceived"))
@@ -177,9 +190,9 @@ class TwakExecutor:
         return Fill(symbol, "buy", qty, price, 0.0, None, time.time())
 
     def sell(self, portfolio: Portfolio, symbol: str, quote_price: float) -> Fill:
-        token = TOKEN_MAP[symbol]
+        token = SWAP_IDS[symbol]
         pos = portfolio.positions.pop(symbol)
-        result = self.client.swap(pos.qty, token, TOKEN_MAP["USDT"])
+        result = self.client.swap(pos.qty, token, SWAP_IDS["USDT"])
         proceeds = _amount(result.get("output") or result.get("minReceived"))
         if proceeds <= 0:
             portfolio.positions[symbol] = pos  # restore; swap did not fill

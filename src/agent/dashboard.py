@@ -13,6 +13,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 from agent import config
+from agent.narrator import NARRATION_PATH
 from agent.runner import JOURNAL_PATH, LEDGER_PATH, PORTFOLIO_PATH
 
 PORT = 8765
@@ -61,6 +62,7 @@ def state() -> dict:
         "equity_series": equity_series[-500:],
         "decisions": [r for r in journal if "signal" in r][-40:][::-1],
         "fills": ledger[::-1],
+        "narration": _read_jsonl(NARRATION_PATH, limit=8)[::-1],
     }
 
 
@@ -136,6 +138,10 @@ PAGE = """<!doctype html>
   .pill.veto{background:rgba(239,83,80,.13);color:var(--red)}
   .pill.info{background:rgba(148,163,184,.12);color:var(--fg2)}
   .gain{color:var(--green)} .loss{color:var(--red)} .dim{color:var(--fg3)}
+  .note{display:flex;gap:14px;padding:9px 0;border-bottom:1px solid var(--muted)}
+  .note:last-child{border-bottom:none}
+  .note .ts{color:var(--fg3);font-size:11px;white-space:nowrap;padding-top:3px}
+  .note p{margin:0;font-size:13px;line-height:1.55;color:var(--fg)}
   footer{font-size:11.5px;color:var(--fg3);text-align:center}
   @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
@@ -162,6 +168,11 @@ PAGE = """<!doctype html>
 <div class="card table-card">
   <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">counts since journal start</span></div>
   <div class="pad gates" id="rules"></div>
+</div>
+
+<div class="card table-card" id="narration-card" style="display:none">
+  <div class="card-h"><h2>Agent commentary</h2><span class="meta">AI narration &middot; observe-only, never trades</span></div>
+  <div class="pad" id="narration"></div>
 </div>
 
 <div class="card table-card">
@@ -232,6 +243,11 @@ function render(s) {
     .sort((a, b) => b[1] - a[1])
     .map(([r, n]) => `<span class="gate ${VETO_RULES.includes(r) ? 'veto' : ''}">${SHIELD}${esc(r).replace(/_/g, ' ')} <b class="num">&times;${n}</b></span>`)
     .join('') || `<span class="gate">${SHIELD}no gates fired yet &mdash; entries passing clean</span>`;
+
+  const notes = s.narration || [];
+  document.getElementById('narration-card').style.display = notes.length ? '' : 'none';
+  document.getElementById('narration').innerHTML = notes.map(n =>
+    `<div class="note"><span class="ts num">${fmtS(n.ts)}</span><p>${esc(n.text)}</p></div>`).join('');
 
   document.getElementById('chartmeta').textContent = es.length > 1
     ? `${es.length} samples · ${fmt(es[0].ts)} → ${fmt(es[es.length - 1].ts)} UTC` : '';

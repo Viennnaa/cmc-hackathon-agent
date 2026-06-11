@@ -15,7 +15,7 @@ import argparse
 import logging
 import time
 
-from agent import config
+from agent import config, narrator
 from agent.data.cmc import CMCClient, CMCError
 from agent.data.store import PriceStore
 from agent.execution import pending
@@ -263,6 +263,10 @@ def main() -> None:
         try:
             tick(cmc, store, portfolio, risk, executor, journal)
             cmc_down_since = None
+            try:
+                narrator.maybe_narrate(portfolio, risk)
+            except Exception as e:  # noqa: BLE001 — narration must never affect trading
+                log.warning("narrator failed (trading unaffected): %s", e)
         except CMCError as e:
             # Transient sense failure: tolerable while flat, not while exposed —
             # no prices means no stop-loss. Flatten after the staleness budget.

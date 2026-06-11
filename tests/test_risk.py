@@ -78,3 +78,14 @@ def test_paper_round_trip_pnl():
     assert sell.pnl_usdt < 0
     assert abs(sell.pnl_usdt) < 30.0 * 0.01  # well under 1% cost on a round trip
     assert "BNB" not in p.positions
+
+
+def test_max_concurrent_positions_cap():
+    from agent.execution.portfolio import Position
+    eng = RiskEngine()
+    p = Portfolio(cash=60.0)
+    for i, sym in enumerate(("BNB", "BTC", "ETH")):
+        p.positions[sym] = Position(sym, 1.0, 30.0, 1.0)
+    v = eng.review("enter", "SOL", p)
+    assert not v.approved
+    assert v.rule == "max_concurrent"

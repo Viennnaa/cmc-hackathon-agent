@@ -26,7 +26,8 @@ from agent.strategy import mean_revert, momentum
 STRATEGIES = {"momentum": momentum.evaluate, "mean_revert": mean_revert.evaluate}
 
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
-PAIRS = {"BNB": "BNBUSDT", "BTC": "BTCUSDT", "ETH": "ETHUSDT"}
+PAIRS = {"BNB": "BNBUSDT", "BTC": "BTCUSDT", "ETH": "ETHUSDT",
+         "SOL": "SOLUSDT", "XRP": "XRPUSDT", "CAKE": "CAKEUSDT"}
 INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}
 
 

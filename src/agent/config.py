@@ -19,14 +19,18 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # --- Risk rules (immutable, judged) -----------------------------------------
 MAX_POSITION_PCT = 0.20          # max 20% of capital per position
+MAX_CONCURRENT_POSITIONS = 3     # breadth without over-deployment (max 60% in market)
 STOP_LOSS_PCT = 0.03             # per-trade stop-loss at -3%
 DAILY_LOSS_CAP_PCT = 0.05        # -5% daily loss -> flatten + halt 24h
 KILL_SWITCH_DRAWDOWN_PCT = 0.10  # -10% drawdown from peak -> flatten + stop
 HALT_HOURS = 24
 
 # --- Trading universe --------------------------------------------------------
-# CMC symbols we trade against USDT on PancakeSwap (BSC). BTCB tracks BTC.
-UNIVERSE = ["BNB", "BTC", "ETH"]
+# CMC symbols we trade against USDT on PancakeSwap (BSC). BTC trades as BTCB;
+# SOL/XRP are Binance-pegged, CAKE is native BSC. Expanded 2026-06-11 from the
+# original trio: majors are highly correlated, so breadth adds independent
+# entry chances without changing any risk rule (20%/position, cash-capped).
+UNIVERSE = ["BNB", "BTC", "ETH", "SOL", "XRP", "CAKE"]
 QUOTE_ASSET = "USDT"
 
 # --- Strategy parameters ------------------------------------------------------

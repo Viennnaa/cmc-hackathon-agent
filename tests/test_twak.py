@@ -1,7 +1,7 @@
 import pytest
 
 from agent.execution.portfolio import Portfolio
-from agent.execution.twak import TwakError, TwakExecutor
+from agent.execution.twak import SWAP_IDS, TwakError, TwakExecutor
 
 
 class FakeClient:
@@ -60,7 +60,10 @@ def test_buy_routes_usdt_to_token_and_books_position():
     ex = TwakExecutor(client)
     p = Portfolio(cash=150.0)
     fill = ex.buy(p, "BTC", 30.0, 100000.0)
-    assert client.swaps == [(30.0, "USDT", "BTCB")]
+    # BEP-20 legs route by asset id, never bare symbol (symbol resolution is
+    # unreliable: "SOL" once quoted BNB)
+    assert client.swaps == [(30.0, "USDT", SWAP_IDS["BTC"])]
+    assert SWAP_IDS["BTC"].startswith("c20000714_t0x")
     assert p.cash == 120.0
     assert p.positions["BTC"].qty == 0.05
     assert abs(fill.price - 600.0) < 1e-9  # 30 USDT / 0.05 BTCB
