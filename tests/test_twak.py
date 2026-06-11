@@ -17,7 +17,14 @@ class FakeClient:
 
     def swap(self, amount, from_token, to_token, slippage_pct=0.5):
         self.swaps.append((amount, from_token, to_token))
-        return {"toAmount": self.swap_out}
+        # real shape verified 2026-06-11: amounts are "0.0496 BNB" strings
+        return {
+            "input": f"{amount} {from_token}",
+            "output": f"{self.swap_out} {to_token}",
+            "minReceived": f"{self.swap_out * 0.99} {to_token}",
+            "provider": "LiquidMesh",
+            "priceImpact": "0",
+        }
 
 
 def test_pre_entry_passes_on_low_risk():

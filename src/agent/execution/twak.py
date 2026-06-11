@@ -51,6 +51,20 @@ def _run(args: list[str], timeout: int = 120) -> dict:
         raise TwakError(f"twak {' '.join(args)} returned non-JSON: {proc.stdout[:200]}") from e
 
 
+def _amount(value) -> float:
+    """Parse twak amount fields: 12.5, "12.5", or "12.5 BNB".
+
+    Verified 2026-06-11 against a real --quote-only response:
+    {"input": "30 USDT", "output": "0.0496... BNB", "minReceived": "...",
+     "provider": "LiquidMesh", "priceImpact": "0"}
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(str(value).split()[0])
+
+
 class TwakClient:
     """Thin typed surface over the twak CLI."""
 
@@ -116,7 +130,9 @@ class TwakExecutor:
     def buy(self, portfolio: Portfolio, symbol: str, size_usdt: float, quote_price: float) -> Fill:
         token = TOKEN_MAP[symbol]
         result = self.client.swap(size_usdt, TOKEN_MAP["USDT"], token)
-        qty = float(result.get("toAmount") or result.get("outputAmount") or 0)
+        # TODO(verify): executed-swap response shape on the Day 8 dry run;
+        # quote-only confirmed to use "output". Fall back to minReceived.
+        qty = _amount(result.get("output") or result.get("minReceived"))
         if qty <= 0:
             raise TwakError(f"swap returned no output amount: {result}")
         price = size_usdt / qty
@@ -128,7 +144,7 @@ class TwakExecutor:
         token = TOKEN_MAP[symbol]
         pos = portfolio.positions.pop(symbol)
         result = self.client.swap(pos.qty, token, TOKEN_MAP["USDT"])
-        proceeds = float(result.get("toAmount") or result.get("outputAmount") or 0)
+        proceeds = _amount(result.get("output") or result.get("minReceived"))
         if proceeds <= 0:
             portfolio.positions[symbol] = pos  # restore; swap did not fill
             raise TwakError(f"swap returned no output amount: {result}")
