@@ -27,12 +27,13 @@ TWAK_CMD = ["twak"]  # assumes global install: npm install -g @trustwallet/cli
 # BTC trades as BTCB (Binance-pegged) on PancakeSwap.
 TOKEN_MAP = {"BNB": "BNB", "BTC": "BTCB", "ETH": "ETH", "USDT": "USDT"}
 
-# Trust Wallet asset IDs on BSC (c714 = SLIP44 714 = BNB Smart Chain).
-# TODO(verify): confirm exact IDs via `twak search` once the CLI is installed.
+# Trust Wallet asset IDs, verified live 2026-06-11: native BNB is c714, but
+# BEP-20 tokens use the legacy smartchain coin id c20000714_t<address>
+# (c714_t... returns TOKEN_NOT_FOUND). Addresses must keep EIP-55 checksum case.
 ASSET_IDS = {
     "BNB": "c714",
-    "BTC": "c714_t0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",  # BTCB
-    "ETH": "c714_t0x2170Ed0880ac9A755fd29B2688956BD959F933F8",  # Binance-pegged ETH
+    "BTC": "c20000714_t0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",  # BTCB
+    "ETH": "c20000714_t0x2170Ed0880ac9A755fd29B2688956BD959F933F8",  # BNB pegged ETH
 }
 
 
@@ -122,10 +123,13 @@ class TwakExecutor:
             result = self.client.risk(asset_id)
         except TwakError as e:
             return f"risk check unavailable, failing closed: {e}"
-        verdict = str(result.get("riskLevel") or result.get("risk") or "").lower()
-        if verdict in ("high", "critical", "danger"):
-            return f"twak risk check flagged {symbol}: {verdict}"
-        return None
+        # verified shape: {"securityInfo": {"riskLevel": "low", ...}, ...}
+        level = str((result.get("securityInfo") or {}).get("riskLevel") or "").lower()
+        if level in ("low", "medium"):
+            return None
+        if level == "":
+            return f"risk level missing for {symbol}, failing closed: {result}"
+        return f"twak risk check flagged {symbol}: {level}"
 
     def buy(self, portfolio: Portfolio, symbol: str, size_usdt: float, quote_price: float) -> Fill:
         token = TOKEN_MAP[symbol]

@@ -13,7 +13,9 @@ class FakeClient:
     def risk(self, asset_id):
         if self.risk_level == "error":
             raise TwakError("boom")
-        return {"riskLevel": self.risk_level}
+        if self.risk_level is None:
+            return {"assetId": asset_id}  # no securityInfo at all
+        return {"assetId": asset_id, "securityInfo": {"riskLevel": self.risk_level}}
 
     def swap(self, amount, from_token, to_token, slippage_pct=0.5):
         self.swaps.append((amount, from_token, to_token))
@@ -37,8 +39,19 @@ def test_pre_entry_vetoes_high_risk():
     assert "flagged" in ex.pre_entry_check("BNB")
 
 
+def test_pre_entry_passes_on_medium_risk():
+    # BTCB is Blockaid-audited but rated medium (mint function); tradeable
+    ex = TwakExecutor(FakeClient(risk_level="medium"))
+    assert ex.pre_entry_check("BTC") is None
+
+
 def test_pre_entry_fails_closed_on_error():
     ex = TwakExecutor(FakeClient(risk_level="error"))
+    assert "failing closed" in ex.pre_entry_check("BNB")
+
+
+def test_pre_entry_fails_closed_on_missing_risk_level():
+    ex = TwakExecutor(FakeClient(risk_level=None))
     assert "failing closed" in ex.pre_entry_check("BNB")
 
 
