@@ -182,6 +182,7 @@ const SHIELD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 
 let lastFetch = 0, lastState = null, pts = [];
 
 const fmt = ts => new Date(ts * 1000).toISOString().slice(5, 16).replace('T', ' ');
+const fmtS = ts => new Date(ts * 1000).toISOString().slice(5, 19).replace('T', ' ');
 const fmtFull = ts => new Date(ts * 1000).toISOString().slice(0, 19).replace('T', ' ');
 
 function fgZone(v) {
@@ -237,14 +238,14 @@ function render(s) {
     const rule = rv.rule
       ? `<span class="pill ${VETO_RULES.includes(rv.rule) ? 'veto' : 'info'}">${rv.rule.replace(/_/g, ' ')}</span>`
       : '<span class="dim">&mdash;</span>';
-    return `<tr><td>${fmt(d.ts)}</td><td>${d.symbol}</td><td class="r">${(q.price ?? 0).toFixed(2)}</td>
+    return `<tr><td>${fmtS(d.ts)}</td><td>${d.symbol}</td><td class="r">${(q.price ?? 0).toFixed(2)}</td>
       <td class="r">${sig.rsi ? sig.rsi.toFixed(1) : '<span class="dim">&mdash;</span>'}</td>
       <td><span class="pill ${act}">${sig.action}</span></td><td>${rule}</td>
       <td class="reason">${sig.reason || ''}</td></tr>`;
   }).join('') || '<tr><td colspan="7"><div class="empty">No decisions recorded yet.</div></td></tr>';
 
   document.querySelector('#fills tbody').innerHTML = s.fills.map(f =>
-    `<tr><td>${fmt(f.ts)}</td><td><span class="pill ${f.side === 'buy' ? 'buy' : 'sell'}">${f.side}</span></td>
+    `<tr><td>${fmtS(f.ts)}</td><td><span class="pill ${f.side === 'buy' ? 'buy' : 'sell'}">${f.side}</span></td>
      <td>${f.symbol}</td><td class="r">${f.qty.toFixed(6)}</td><td class="r">${f.price.toFixed(2)}</td>
      <td class="r ${f.pnl_usdt == null ? 'dim' : f.pnl_usdt >= 0 ? 'gain' : 'loss'}">${f.pnl_usdt == null ? '&mdash;' : (f.pnl_usdt >= 0 ? '+' : '') + f.pnl_usdt.toFixed(3)}</td></tr>`
   ).join('') || '<tr><td colspan="6"><div class="empty">No trades yet &mdash; risk gates holding.</div></td></tr>';
