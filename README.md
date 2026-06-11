@@ -55,6 +55,9 @@ Every tick writes a decision record to `data/journal.jsonl`
 - [x] Paper-trading loop: CMC quotes + fear&greed → RSI/MACD momentum → risk gates → simulated fills
 - [x] TWAK execution layer: CLI wrapper, swap quotes verified live, token-risk gate, agent wallet created
 - [x] Backtest harness (Binance klines through the live strategy/risk/execution components)
-- [ ] BNB AI Agent SDK: ERC-8004 identity (Day 7)
-- [ ] Mainnet dry-run with ~$20 + observability dashboard (Day 8)
+- [x] BNB AI Agent SDK: ERC-8004 identity — **agentId 1365** on bsc-testnet
+      ([tx](https://testnet.bscscan.com/tx/0x401e212d1e58ca4e2f5623cf9494071788f65833fcf9103c3aa65e8002eb2313));
+      note: MegaFuel paymaster dropped sponsored txs, registered via `--no-paymaster` + faucet gas
+- [x] Observability dashboard: `uv run python -m agent.dashboard` → http://localhost:8765
+- [ ] Mainnet dry-run with ~$20 (Day 8)
 - [ ] Fund agent wallet `0x2c909Ea17750F574C81f14A96291BA5779E5736f` (BSC) with $100–200 + gas BNB
