@@ -31,7 +31,7 @@ AGENT_DESCRIPTION = (
 REPO_URL = "https://github.com/Viennnaa/cmc-hackathon-agent"
 
 
-def register(debug: bool = False) -> dict:
+def register(debug: bool = False, no_paymaster: bool = False) -> dict:
     if IDENTITY_PATH.exists():
         identity = json.loads(IDENTITY_PATH.read_text())
         print(f"already registered: agentId {identity['agentId']} "
@@ -51,6 +51,13 @@ def register(debug: bool = False) -> dict:
 
     wallet = EVMWalletProvider(password=password)
     sdk = ERC8004Agent(network="bsc-testnet", wallet_provider=wallet, debug=debug)
+    if no_paymaster:
+        # MegaFuel testnet paymaster accepts sponsored txs but never mines
+        # them (verified 2026-06-11: identical tx hash, never on chain).
+        # Dropping the paymaster makes the SDK take its standard gas path —
+        # the identity wallet must hold a little faucet tBNB.
+        sdk.contract.paymaster = None
+        print("paymaster disabled — paying gas from identity wallet")
     agent_uri = sdk.generate_agent_uri(
         name=AGENT_NAME,
         description=AGENT_DESCRIPTION,
@@ -77,6 +84,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ERC-8004 agent identity")
     parser.add_argument("--show", action="store_true", help="print saved identity")
     parser.add_argument("--debug", action="store_true", help="verbose SDK/paymaster logging")
+    parser.add_argument("--no-paymaster", action="store_true",
+                        help="pay gas from the identity wallet (needs faucet tBNB)")
     args = parser.parse_args()
 
     if args.show:
@@ -85,7 +94,7 @@ def main() -> None:
         else:
             print("not registered yet — run: python -m agent.identity")
         return
-    register(debug=args.debug)
+    register(debug=args.debug, no_paymaster=args.no_paymaster)
 
 
 if __name__ == "__main__":
