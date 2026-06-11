@@ -38,8 +38,12 @@ class CMCClient:
         })
 
     def _get(self, path: str, params: dict) -> dict:
-        resp = self._session.get(f"{BASE_URL}{path}", params=params, timeout=30)
-        body = resp.json()
+        try:
+            resp = self._session.get(f"{BASE_URL}{path}", params=params, timeout=30)
+            body = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            # transient network/parse failures must not crash the trading loop
+            raise CMCError(f"CMC {path} request failed: {e}") from e
         status = body.get("status", {})
         # v2 endpoints return error_code as int 0, v3 as string "0"
         error_code = int(status.get("error_code") or 0)
