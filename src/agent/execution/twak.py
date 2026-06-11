@@ -66,6 +66,31 @@ def _amount(value) -> float:
     return float(str(value).split()[0])
 
 
+def find_usdt_balance(data) -> float | None:
+    """Best-effort USDT balance from `twak wallet portfolio` output.
+
+    The exact shape is verified on the dry run; this walks the structure for
+    any node claiming symbol USDT with a balance-like field. Callers fail
+    closed (refuse to trade live) when this returns None.
+    """
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            sym = str(node.get("symbol") or node.get("token") or node.get("asset") or "").upper()
+            if sym == "USDT":
+                for key in ("balance", "amount", "quantity", "value"):
+                    if node.get(key) is not None:
+                        try:
+                            return _amount(node[key])
+                        except (ValueError, IndexError):
+                            continue
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return None
+
+
 class TwakClient:
     """Thin typed surface over the twak CLI."""
 

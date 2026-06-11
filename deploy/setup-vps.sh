@@ -17,6 +17,8 @@ npm install -g @trustwallet/cli
 
 echo "== agent user =="
 id agent >/dev/null 2>&1 || adduser --disabled-password --gecos "" agent
+# the runbook rsyncs the repo BEFORE this user exists; fix ownership now
+[ -d /home/agent/cmc-hackathon-agent ] && chown -R agent:agent /home/agent/cmc-hackathon-agent
 
 echo "== uv for agent user =="
 sudo -u agent bash -c 'command -v ~/.local/bin/uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh'

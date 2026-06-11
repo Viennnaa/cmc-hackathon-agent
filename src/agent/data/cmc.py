@@ -8,10 +8,23 @@ backfill from /v2/cryptocurrency/ohlcv/historical without touching callers.
 
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 import requests
 
+from agent import config
+
 BASE_URL = "https://pro-api.coinmarketcap.com"
+
+
+def _parse_iso(value: str | None) -> float | None:
+    """CMC last_updated ('2026-06-11T14:45:03.000Z') -> epoch seconds, or None."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -66,6 +79,11 @@ class CMCClient:
             if not entries:
                 continue
             q = entries[0]["quote"][convert]
+            # Stale upstream data must not masquerade as a fresh price: a
+            # dropped symbol routes into the runner's quote-gap protection.
+            source_ts = _parse_iso(q.get("last_updated"))
+            if source_ts is not None and now - source_ts > config.STALE_QUOTE_MAX_AGE_SECONDS:
+                continue
             out[sym] = Quote(
                 symbol=sym,
                 price=q["price"],

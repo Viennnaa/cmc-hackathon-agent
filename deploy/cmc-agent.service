@@ -9,7 +9,10 @@ User=agent
 WorkingDirectory=/home/agent/cmc-hackathon-agent
 Environment=PATH=/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/agent/.local/bin/uv run python -m agent.runner
-Restart=always
+# on-failure, NOT always: the agent exits cleanly (code 0) when the judged
+# kill switch engages or an order needs manual reconcile — restarting past
+# either would violate the declared rules. Crashes (non-zero) still restart.
+Restart=on-failure
 RestartSec=10
 # journald keeps the process log; the judged artifacts (journal.jsonl,
 # ledger.jsonl, portfolio.json) live in WorkingDirectory/data as always.

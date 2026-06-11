@@ -45,6 +45,12 @@ MIN_HISTORY = MACD_SLOW + MACD_SIGNAL  # bars needed before signals are valid
 FEAR_GREED_VETO_BELOW = 20  # extreme fear -> no new entries (sentiment veto)
 REGIME_MIN_24H_CHANGE = 1.0  # long-only: require 24h trend >= +1% to enter (CMC field)
 
+# --- Data-staleness protection (fail closed) -----------------------------------
+# A held position with no fresh price gets no stop-loss enforcement, so stale
+# or missing quotes trigger a protective exit rather than silent exposure.
+STALE_QUOTE_MAX_AGE_SECONDS = 300     # CMC quote older than this is not a fresh price
+STALE_QUOTE_FLATTEN_SECONDS = 600     # held symbol unpriced this long -> protective exit
+
 # --- Paper execution model ----------------------------------------------------
 PAPER_FEE_PCT = 0.0025      # PancakeSwap v2 LP fee
 PAPER_SLIPPAGE_PCT = 0.001  # assumed slippage on top-liquidity pairs

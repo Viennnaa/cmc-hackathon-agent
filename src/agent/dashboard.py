@@ -21,8 +21,13 @@ PORT = 8765
 def _read_jsonl(path: Path, limit: int = 200) -> list[dict]:
     if not path.exists():
         return []
-    lines = path.read_text().strip().splitlines()[-limit:]
-    return [json.loads(l) for l in lines]
+    out = []
+    for line in path.read_text().strip().splitlines()[-limit:]:
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue  # a torn tail write must not take down /api/state
+    return out
 
 
 def state() -> dict:
@@ -181,6 +186,8 @@ const VETO_RULES = ['token_risk_veto','stop_loss','kill_switch','daily_loss_cap'
 const SHIELD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
 let lastFetch = 0, lastState = null, pts = [];
 
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = ts => new Date(ts * 1000).toISOString().slice(5, 16).replace('T', ' ');
 const fmtS = ts => new Date(ts * 1000).toISOString().slice(5, 19).replace('T', ' ');
 const fmtFull = ts => new Date(ts * 1000).toISOString().slice(0, 19).replace('T', ' ');
@@ -215,7 +222,7 @@ function render(s) {
     {l:'Equity', v:`${eq.toFixed(2)}<span class="unit">USDT</span>`, s:`peak ${(p.peak_equity ?? eq).toFixed(2)}`},
     {l:'Return', v:`${ret >= 0 ? '+' : ''}${ret.toFixed(2)}<span class="unit">%</span>`, c:ret >= 0 ? 'pos' : 'neg', s:`since start &middot; ${START} USDT`},
     {l:'Cash', v:`${(p.cash ?? 0).toFixed(2)}<span class="unit">USDT</span>`, s:positions.length ? `${(eq - (p.cash ?? 0)).toFixed(2)} deployed` : 'fully in cash'},
-    {l:'Open positions', v:String(positions.length), s:positions.length ? positions.join(' &middot; ') : 'flat &mdash; waiting for signal'},
+    {l:'Open positions', v:String(positions.length), s:positions.length ? esc(positions.join(' · ')) : 'flat &mdash; waiting for signal'},
     {l:'Max drawdown', v:`${dd.toFixed(2)}<span class="unit">%</span>`, c:dd > 5 ? 'neg' : '', s:`across ${vals.length} samples`},
     {l:'Fear &amp; Greed', v:fg ?? '&mdash;', s:`<span style="color:${zcol}">${zone}</span>`,
      extra:fg != null ? `<div class="gauge" aria-hidden="true"><i style="left:${Math.min(Math.max(fg, 0), 100)}%"></i></div>` : ''},
@@ -223,7 +230,7 @@ function render(s) {
 
   document.getElementById('rules').innerHTML = Object.entries(s.rule_counts)
     .sort((a, b) => b[1] - a[1])
-    .map(([r, n]) => `<span class="gate ${VETO_RULES.includes(r) ? 'veto' : ''}">${SHIELD}${r.replace(/_/g, ' ')} <b class="num">&times;${n}</b></span>`)
+    .map(([r, n]) => `<span class="gate ${VETO_RULES.includes(r) ? 'veto' : ''}">${SHIELD}${esc(r).replace(/_/g, ' ')} <b class="num">&times;${n}</b></span>`)
     .join('') || `<span class="gate">${SHIELD}no gates fired yet &mdash; entries passing clean</span>`;
 
   document.getElementById('chartmeta').textContent = es.length > 1
@@ -236,17 +243,17 @@ function render(s) {
     const sig = d.signal || {}, rv = d.risk_verdict || {}, q = (d.inputs || {}).quote || {};
     const act = sig.action === 'enter' ? 'enter' : sig.action === 'exit' ? 'exit' : 'hold';
     const rule = rv.rule
-      ? `<span class="pill ${VETO_RULES.includes(rv.rule) ? 'veto' : 'info'}">${rv.rule.replace(/_/g, ' ')}</span>`
+      ? `<span class="pill ${VETO_RULES.includes(rv.rule) ? 'veto' : 'info'}">${esc(rv.rule).replace(/_/g, ' ')}</span>`
       : '<span class="dim">&mdash;</span>';
-    return `<tr><td>${fmtS(d.ts)}</td><td>${d.symbol}</td><td class="r">${(q.price ?? 0).toFixed(2)}</td>
+    return `<tr><td>${fmtS(d.ts)}</td><td>${esc(d.symbol)}</td><td class="r">${(q.price ?? 0).toFixed(2)}</td>
       <td class="r">${sig.rsi ? sig.rsi.toFixed(1) : '<span class="dim">&mdash;</span>'}</td>
-      <td><span class="pill ${act}">${sig.action}</span></td><td>${rule}</td>
-      <td class="reason">${sig.reason || ''}</td></tr>`;
+      <td><span class="pill ${act}">${esc(sig.action)}</span></td><td>${rule}</td>
+      <td class="reason">${esc(sig.reason || '')}</td></tr>`;
   }).join('') || '<tr><td colspan="7"><div class="empty">No decisions recorded yet.</div></td></tr>';
 
   document.querySelector('#fills tbody').innerHTML = s.fills.map(f =>
-    `<tr><td>${fmtS(f.ts)}</td><td><span class="pill ${f.side === 'buy' ? 'buy' : 'sell'}">${f.side}</span></td>
-     <td>${f.symbol}</td><td class="r">${f.qty.toFixed(6)}</td><td class="r">${f.price.toFixed(2)}</td>
+    `<tr><td>${fmtS(f.ts)}</td><td><span class="pill ${f.side === 'buy' ? 'buy' : 'sell'}">${esc(f.side)}</span></td>
+     <td>${esc(f.symbol)}</td><td class="r">${f.qty.toFixed(6)}</td><td class="r">${f.price.toFixed(2)}</td>
      <td class="r ${f.pnl_usdt == null ? 'dim' : f.pnl_usdt >= 0 ? 'gain' : 'loss'}">${f.pnl_usdt == null ? '&mdash;' : (f.pnl_usdt >= 0 ? '+' : '') + f.pnl_usdt.toFixed(3)}</td></tr>`
   ).join('') || '<tr><td colspan="6"><div class="empty">No trades yet &mdash; risk gates holding.</div></td></tr>';
 }

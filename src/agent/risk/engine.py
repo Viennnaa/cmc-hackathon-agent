@@ -10,8 +10,11 @@ Every verdict carries the rule that fired so the journal shows
 inputs -> rule -> action for the judges' replay.
 """
 
+import json
+import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from agent import config
 from agent.execution.portfolio import Portfolio
@@ -35,6 +38,29 @@ class RiskEngine:
     def note_exit(self, symbol: str, now: float | None = None) -> None:
         """Record an exit so re-entries respect the cooldown (anti-churn)."""
         self.last_exit[symbol] = now or time.time()
+
+    # --- persistence: judged halts MUST survive restarts ----------------------
+    # Without this, systemd restarting the process would silently void the
+    # kill switch and 24h halt — the exact rules judges score adherence to.
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "halted_until": self.halted_until,
+            "killed": self.killed,
+            "last_exit": self.last_exit,
+        }))
+        os.replace(tmp, path)
+
+    @classmethod
+    def load(cls, path: Path) -> "RiskEngine":
+        eng = cls()
+        if path.exists():
+            data = json.loads(path.read_text())
+            eng.halted_until = float(data.get("halted_until") or 0.0)
+            eng.killed = bool(data.get("killed") or False)
+            eng.last_exit = {k: float(v) for k, v in (data.get("last_exit") or {}).items()}
+        return eng
 
     # --- portfolio-level checks, run BEFORE strategy intents -----------------
     def portfolio_gates(self, portfolio: Portfolio, now: float | None = None) -> Verdict | None:

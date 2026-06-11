@@ -44,7 +44,9 @@ def fetch_klines(pair: str, interval: str, days: int) -> list[tuple[float, float
         rows = resp.json()
         if not rows:
             break
-        out.extend((r[6] / 1000.0, float(r[4])) for r in rows)  # close time, close
+        # close time, close — drop the still-open current candle: its close
+        # time is in the future and seeding it would fake a completed bar
+        out.extend((r[6] / 1000.0, float(r[4])) for r in rows if r[6] / 1000.0 <= time.time())
         start = rows[-1][6] + 1
     return out
 

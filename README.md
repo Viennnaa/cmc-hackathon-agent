@@ -60,4 +60,6 @@ Every tick writes a decision record to `data/journal.jsonl`
       note: MegaFuel paymaster dropped sponsored txs, registered via `--no-paymaster` + faucet gas
 - [x] Observability dashboard: `uv run python -m agent.dashboard` → http://localhost:8765
 - [ ] Mainnet dry-run with ~$20 (Day 8)
-- [ ] Fund agent wallet `0x2c909Ea17750F574C81f14A96291BA5779E5736f` (BSC) with $100–200 + gas BNB
+- [ ] Fund the agent wallet with $100–200 + gas BNB — use the address from
+      `twak wallet address` on the VPS (a fresh wallet is created during deploy;
+      see deploy/DEPLOY.md — the original 0x2c90… wallet is retired, do not fund it)

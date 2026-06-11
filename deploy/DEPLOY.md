@@ -15,11 +15,11 @@ Create the VPS (Ubuntu 24.04, ≥1 GB), add your SSH key, note the IP.
 ```bash
 rsync -av --exclude .venv --exclude __pycache__ --exclude .git \
   ~/projects/cmc-hackathon-agent/ root@<IP>:/home/agent/cmc-hackathon-agent/
-ssh root@<IP> 'chown -R agent:agent /home/agent/cmc-hackathon-agent 2>/dev/null || true'
 ```
 
 (`data/` rides along — keeps the paper journal continuous. `.env` rides along
-too; it is rewritten in step 4.)
+too; it is rewritten in step 4. Ownership is fixed by setup-vps.sh in step 3,
+which creates the `agent` user and chowns the tree.)
 
 ## 3. Provision the box (as root)
 
@@ -72,6 +72,26 @@ ssh -L 8765:127.0.0.1:8765 agent@<IP>   # then open http://localhost:8765
   `AGENT_MODE=live`, restart, confirm dashboard shows LIVE.
 - **Jun 28** — after window close: flatten if holding, stop services, pull
   `data/` back to the laptop for the submission artifacts.
+
+## If the agent stops itself
+
+The agent exits cleanly (and systemd leaves it stopped — `Restart=on-failure`)
+in exactly three cases. All three are deliberate; do not blindly restart.
+
+1. **`pending_order.json exists`** — an order was in flight when the process
+   died; it may or may not have executed on-chain. Compare
+   `twak wallet portfolio` against `data/portfolio.json`:
+   - trade executed → edit portfolio.json to record it (cash, position),
+   - trade absent → no edit needed.
+   Then `rm data/pending_order.json` and `systemctl start cmc-agent`.
+2. **`kill switch is engaged`** — the judged −10% drawdown stop fired.
+   This is permanent for the window by design. Leave it stopped.
+3. **`live reconcile failed`** — wallet balance unreadable at live startup
+   (fail closed). Run `twak wallet portfolio` manually and fix auth/shape.
+
+State files in `data/`: `portfolio.json` (positions/cash), `risk_state.json`
+(kill switch, 24h halt, cooldowns — survives restarts), `pending_order.json`
+(only present while an order is unreconciled).
 
 ## Rollback
 

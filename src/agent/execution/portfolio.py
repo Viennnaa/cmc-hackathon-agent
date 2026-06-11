@@ -5,6 +5,7 @@ the full ledger; losing state would corrupt rule-adherence evidence).
 """
 
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -26,6 +27,7 @@ class Portfolio:
     day_start_equity: float = 0.0
     day_start_ts: float = 0.0
     last_prices: dict[str, float] = field(default_factory=dict)
+    mode: str = ""  # "paper" | "live" — guards against mixing paper history into live baselines
 
     def __post_init__(self) -> None:
         if self.peak_equity == 0.0:
@@ -58,8 +60,9 @@ class Portfolio:
     # --- persistence ----------------------------------------------------------
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = asdict(self)
-        path.write_text(json.dumps(data, indent=2))
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2))
+        os.replace(tmp, path)  # atomic: a crash never leaves half-written state
 
     @classmethod
     def load(cls, path: Path, starting_capital: float) -> "Portfolio":
