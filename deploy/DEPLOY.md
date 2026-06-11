@@ -70,6 +70,9 @@ ssh -L 8765:127.0.0.1:8765 agent@<IP>   # then open http://localhost:8765
   JSON shape (TODO(verify) in twak.py), flip back to paper.
 - **Jun 22 before window** — re-run the seed-store warm-up, set
   `AGENT_MODE=live`, restart, confirm dashboard shows LIVE.
+  NOTE: Binance geo-blocks US VPS IPs (HTTP 451), so seed-store must run on
+  the laptop, then: stop cmc-agent on the VPS → rsync `data/prices.sqlite`
+  over → start cmc-agent. (Live CMC sampling on the VPS is unaffected.)
 - **Jun 28** — after window close: flatten if holding, stop services, pull
   `data/` back to the laptop for the submission artifacts.
 
