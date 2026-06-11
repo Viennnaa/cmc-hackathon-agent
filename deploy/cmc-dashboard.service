@@ -1,0 +1,18 @@
+[Unit]
+Description=CMC Disciplined Trader - observability dashboard (127.0.0.1:8765)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent
+WorkingDirectory=/home/agent/cmc-hackathon-agent
+Environment=PATH=/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/agent/.local/bin/uv run python -m agent.dashboard
+Restart=always
+RestartSec=10
+# Binds loopback only — view it over an SSH tunnel:
+#   ssh -L 8765:127.0.0.1:8765 agent@<vps-ip>
+
+[Install]
+WantedBy=multi-user.target

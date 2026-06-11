@@ -1,0 +1,80 @@
+# VPS deployment — live window Jun 22–28
+
+Moves the agent off the laptop so sleep/reboot/Wi-Fi can't kill the loop while
+a position is open (stop-loss and kill switch only run while the loop runs).
+
+Target: any small Ubuntu 24.04 box (≥1 GB RAM). Dashboard stays loopback-only;
+the only open port is SSH.
+
+## 1. Provision
+
+Create the VPS (Ubuntu 24.04, ≥1 GB), add your SSH key, note the IP.
+
+## 2. Ship the code (from the laptop)
+
+```bash
+rsync -av --exclude .venv --exclude __pycache__ --exclude .git \
+  ~/projects/cmc-hackathon-agent/ root@<IP>:/home/agent/cmc-hackathon-agent/
+ssh root@<IP> 'chown -R agent:agent /home/agent/cmc-hackathon-agent 2>/dev/null || true'
+```
+
+(`data/` rides along — keeps the paper journal continuous. `.env` rides along
+too; it is rewritten in step 4.)
+
+## 3. Provision the box (as root)
+
+```bash
+ssh root@<IP> 'bash /home/agent/cmc-hackathon-agent/deploy/setup-vps.sh'
+```
+
+Installs node 20 + twak CLI, uv, the `agent` user, swap, ufw (SSH only), and
+the two systemd units (enabled, not yet started).
+
+## 4. Secrets + wallet (as agent)
+
+```bash
+ssh root@<IP>
+su - agent && cd cmc-hackathon-agent
+~/.local/bin/uv sync
+
+# twak API credentials: copy ~/.twak/credentials.json from the laptop,
+# or re-auth with TWAK_ACCESS_ID / TWAK_HMAC_SECRET.
+
+# FRESH trading wallet (the old one's password leaked into shell history —
+# this retires it; the old wallet was never funded):
+twak wallet create        # store the new password in a password manager
+twak wallet address       # -> new BSC funding address, replaces 0x2c90…736F
+
+# .env: same keys as the laptop copy; keep AGENT_MODE=paper until Jun 22.
+```
+
+## 5. Warm up + start
+
+```bash
+~/.local/bin/uv run python -m agent.backtest --days 3 --interval 1h --seed-store
+exit   # back to root
+systemctl start cmc-agent cmc-dashboard
+journalctl -u cmc-agent -f          # expect: "starting in paper mode | …"
+```
+
+## 6. Watch the dashboard
+
+```bash
+ssh -L 8765:127.0.0.1:8765 agent@<IP>   # then open http://localhost:8765
+```
+
+## Timeline
+
+- **~Jun 18** — fund the NEW wallet address with $20 USDT (BSC), flip
+  `AGENT_MODE=live`, `systemctl restart cmc-agent`, verify one real swap's
+  JSON shape (TODO(verify) in twak.py), flip back to paper.
+- **Jun 22 before window** — re-run the seed-store warm-up, set
+  `AGENT_MODE=live`, restart, confirm dashboard shows LIVE.
+- **Jun 28** — after window close: flatten if holding, stop services, pull
+  `data/` back to the laptop for the submission artifacts.
+
+## Rollback
+
+Stop the services, rsync `data/` back, resume on the laptop with
+`nohup uv run python -m agent.runner >> data/agent.log 2>&1 &`. Never run
+both machines in live mode at once — two loops would double-trade one wallet.

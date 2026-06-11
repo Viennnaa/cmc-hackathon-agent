@@ -1,0 +1,18 @@
+[Unit]
+Description=CMC Disciplined Trader - agent loop (sense/decide/risk/execute/record)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent
+WorkingDirectory=/home/agent/cmc-hackathon-agent
+Environment=PATH=/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/agent/.local/bin/uv run python -m agent.runner
+Restart=always
+RestartSec=10
+# journald keeps the process log; the judged artifacts (journal.jsonl,
+# ledger.jsonl, portfolio.json) live in WorkingDirectory/data as always.
+
+[Install]
+WantedBy=multi-user.target
