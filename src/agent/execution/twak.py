@@ -13,6 +13,7 @@ on the command line).
 """
 
 import json
+import os
 import subprocess
 import time
 
@@ -118,10 +119,16 @@ class TwakClient:
 
     def swap(self, amount: float, from_token: str, to_token: str,
              slippage_pct: float = 0.5) -> dict:
-        return _run([
+        args = [
             "swap", str(amount), from_token, to_token,
             "--chain", CHAIN, "--slippage", str(slippage_pct),
-        ])
+        ]
+        # Executed swaps need the wallet password. macOS pulls it from the
+        # keychain; headless Linux (VPS) must supply it via env.
+        password = os.getenv("TWAK_WALLET_PASSWORD", "")
+        if password:
+            args += ["--password", password]
+        return _run(args)
 
 
 class TwakExecutor:
