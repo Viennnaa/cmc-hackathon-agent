@@ -93,8 +93,10 @@ in exactly three cases. All three are deliberate; do not blindly restart.
    (fail closed). Run `twak wallet portfolio` manually and fix auth/shape.
 
 State files in `data/`: `portfolio.json` (positions/cash), `risk_state.json`
-(kill switch, 24h halt, cooldowns — survives restarts), `pending_order.json`
-(only present while an order is unreconciled).
+(kill switch, 24h halt, cooldowns — survives restarts), `strategy_state.json`
+(active strategy + size factor from the nightly self-review; safe to delete,
+regenerates with the adaptive default), `pending_order.json` (only present
+while an order is unreconciled).
 
 ## Rollback
 

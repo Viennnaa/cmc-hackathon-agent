@@ -54,6 +54,23 @@ class PriceStore:
         closes = [r[1] for r in rows if r[0] != current_bucket]
         return list(reversed(closes[:limit]))
 
+    def bar_series(self, symbol: str, bar_seconds: int,
+                   limit: int = 500) -> list[tuple[float, float]]:
+        """[(bar_close_ts, close_price)] oldest first — same shape as backtest
+        candles, so the self-review can replay the agent's own sampled data.
+
+        The still-forming bucket is excluded (completed bars only).
+        """
+        rows = self._conn.execute(
+            """SELECT CAST(ts / ? AS INTEGER) AS bucket, price, MAX(ts)
+               FROM prices WHERE symbol = ?
+               GROUP BY bucket ORDER BY bucket DESC LIMIT ?""",
+            (bar_seconds, symbol, limit + 1),
+        ).fetchall()
+        current_bucket = int(time.time() // bar_seconds)
+        closes = [((r[0] + 1) * bar_seconds, r[1]) for r in rows if r[0] != current_bucket]
+        return list(reversed(closes[:limit]))
+
     def count(self, symbol: str) -> int:
         return self._conn.execute(
             "SELECT COUNT(*) FROM prices WHERE symbol = ?", (symbol,)

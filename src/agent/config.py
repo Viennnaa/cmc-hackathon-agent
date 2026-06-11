@@ -49,6 +49,27 @@ MIN_HISTORY = MACD_SLOW + MACD_SIGNAL  # bars needed before signals are valid
 FEAR_GREED_VETO_BELOW = 20  # extreme fear -> no new entries (sentiment veto)
 REGIME_MIN_24H_CHANGE = 1.0  # long-only: require 24h trend >= +1% to enter (CMC field)
 
+# --- Adaptive regime router ----------------------------------------------------
+# The 24h filter above is blind to anything longer — bear-market bounces clear
+# +1%/24h constantly (2026-06 backtests: momentum alone -7.12%/30d, every entry
+# a failed bounce). The router classifies each symbol against a 5-day SMA and
+# changes BEHAVIOR per regime instead of just muting entries:
+#   uptrend  (px > sma*(1+band)) -> momentum entries
+#   downtrend(px < sma*(1-band)) -> cash: no entries, exits still honored
+#   chop     (inside the band)   -> mean-reversion dip buying
+REGIME_SMA_BARS = 120   # 5 days of 1h bars
+REGIME_BAND_PCT = 0.01  # +/-1% neutral band around the SMA
+
+# --- Nightly self-review --------------------------------------------------------
+# Once per UTC day the agent replays its own sampled prices through every
+# strategy in the menu and adopts the best trailing performer. NARROW-ONLY:
+# the review may shrink entry sizes (factor < 1) but can never raise any risk
+# limit — the judged rules above stay immutable.
+SELF_REVIEW_TRAILING_DAYS = 14
+SELF_REVIEW_MIN_BARS = 48                # no review until 2 days of bars exist
+SELF_REVIEW_DEFENSIVE_RETURN = -0.05     # best trailing return under -5% ...
+SELF_REVIEW_DEFENSIVE_SIZE_FACTOR = 0.5  # ... -> halve entry sizes (never raise)
+
 # --- Data-staleness protection (fail closed) -----------------------------------
 # A held position with no fresh price gets no stop-loss enforcement, so stale
 # or missing quotes trigger a protective exit rather than silent exposure.

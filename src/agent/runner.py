@@ -15,7 +15,7 @@ import argparse
 import logging
 import time
 
-from agent import config, narrator
+from agent import config, narrator, review
 from agent.data.cmc import CMCClient, CMCError
 from agent.data.store import PriceStore
 from agent.execution import pending
@@ -23,7 +23,7 @@ from agent.execution.paper import PaperExecutor
 from agent.execution.portfolio import Portfolio
 from agent.record.journal import Journal
 from agent.risk.engine import RiskEngine
-from agent.strategy import momentum
+from agent.strategy import STRATEGIES, momentum
 
 log = logging.getLogger("agent")
 
@@ -61,7 +61,8 @@ def _sell(executor, journal, portfolio: Portfolio, sym: str, price: float):
 
 
 def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
-         risk: RiskEngine, executor: PaperExecutor, journal: Journal) -> None:
+         risk: RiskEngine, executor: PaperExecutor, journal: Journal,
+         strategy_state: review.StrategyState) -> None:
     if pending.read() is not None:
         raise UnreconciledOrderError(
             "pending_order.json exists — reconcile wallet vs portfolio.json "
@@ -127,8 +128,9 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
             continue
 
         bars = store.bars(sym, config.BAR_SECONDS)
-        sig = momentum.evaluate(sym, bars, sym in portfolio.positions, fear_greed,
-                                change_24h=q.percent_change_24h)
+        evaluate = STRATEGIES[strategy_state.strategy]
+        sig = evaluate(sym, bars, sym in portfolio.positions, fear_greed,
+                       change_24h=q.percent_change_24h)
         verdict = risk.review(sig.action, sym, portfolio)
         journal.decision(sym, q, sig, verdict, fear_greed, portfolio.equity())
 
@@ -138,7 +140,9 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
                 journal.event("token_risk_veto", f"{sym}: {veto}", portfolio.equity())
                 log.warning("%s entry vetoed by token risk check: %s", sym, veto)
                 continue
-            fill = _buy(executor, journal, portfolio, sym, verdict.size_usdt, q.price)
+            # narrow-only: the self-review can shrink entries, never grow them
+            size = verdict.size_usdt * min(strategy_state.size_factor, 1.0)
+            fill = _buy(executor, journal, portfolio, sym, size, q.price)
             log.info("%s ENTER %.6f @ %.4f (%s)", sym, fill.qty, fill.price, sig.reason)
         elif verdict.approved and verdict.action == "exit" and sym in portfolio.positions:
             fill = _sell(executor, journal, portfolio, sym, q.price)
@@ -254,15 +258,22 @@ def main() -> None:
 
     cmc = CMCClient(settings.cmc_api_key)
     store = PriceStore(PRICES_PATH)
+    strategy_state = review.StrategyState.load()
 
-    log.info("starting in %s mode | capital %.2f USDT | universe %s | poll %ss",
-             settings.mode, portfolio.equity(), config.UNIVERSE, settings.poll_interval)
+    log.info("starting in %s mode | capital %.2f USDT | universe %s | poll %ss | "
+             "strategy %s (size factor %.2f)",
+             settings.mode, portfolio.equity(), config.UNIVERSE, settings.poll_interval,
+             strategy_state.strategy, strategy_state.size_factor)
 
     cmc_down_since: float | None = None
     while True:
         try:
-            tick(cmc, store, portfolio, risk, executor, journal)
+            tick(cmc, store, portfolio, risk, executor, journal, strategy_state)
             cmc_down_since = None
+            try:
+                review.maybe_review(strategy_state, store, journal, portfolio.equity())
+            except Exception as e:  # noqa: BLE001 — a failed review keeps yesterday's strategy
+                log.warning("self-review failed (trading unaffected): %s", e)
             try:
                 narrator.maybe_narrate(portfolio, risk)
             except Exception as e:  # noqa: BLE001 — narration must never affect trading
