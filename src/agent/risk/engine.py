@@ -30,6 +30,11 @@ class RiskEngine:
     def __init__(self) -> None:
         self.halted_until: float = 0.0
         self.killed: bool = False
+        self.last_exit: dict[str, float] = {}
+
+    def note_exit(self, symbol: str, now: float | None = None) -> None:
+        """Record an exit so re-entries respect the cooldown (anti-churn)."""
+        self.last_exit[symbol] = now or time.time()
 
     # --- portfolio-level checks, run BEFORE strategy intents -----------------
     def portfolio_gates(self, portfolio: Portfolio, now: float | None = None) -> Verdict | None:
@@ -89,6 +94,11 @@ class RiskEngine:
             return Verdict(False, "none", "daily_halt", f"halted for another {remaining:.1f}h")
         if symbol in portfolio.positions:
             return Verdict(False, "none", "single_position", f"already holding {symbol}")
+        since_exit = now - self.last_exit.get(symbol, float("-inf"))
+        if since_exit < config.REENTRY_COOLDOWN_SECONDS:
+            remaining = (config.REENTRY_COOLDOWN_SECONDS - since_exit) / 60
+            return Verdict(False, "none", "reentry_cooldown",
+                           f"{symbol} exited {since_exit / 60:.0f}m ago; {remaining:.0f}m cooldown left")
 
         size = portfolio.equity() * config.MAX_POSITION_PCT
         if size > portfolio.cash:

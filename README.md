@@ -26,6 +26,25 @@ uv run pytest                          # tests
 | Stop-loss | −3% per trade | forced exit, outranks strategy |
 | Daily loss cap | −5% on the day | flatten all + halt 24h |
 | Kill switch | −10% drawdown from peak | flatten all + permanent stop |
+| Token risk | TWAK security check (fail closed) | entry vetoed |
+| Re-entry cooldown | 8h after any exit per symbol | entry rejected (anti-churn) |
+| Sentiment veto | CMC Fear & Greed < 20 | no new entries |
+| Regime filter | CMC 24h change < +1% | no new entries (long-only) |
+
+## Backtest findings (Binance klines through the live components)
+
+Active trading on 15m bars lost ~10% to fee churn (48 round trips/14d at
+~0.7% round-trip cost). The locked config — 1h bars, crossover-confirmed
+entries, regime filter, cooldown — trades 5×/14d with max drawdown 1.36%
+and no risk-rule firings. These runs exclude the Fear & Greed veto (no
+historical data on the free tier); in the current extreme-fear regime the
+live agent would sit fully flat, i.e. strictly safer than the backtest.
+
+```bash
+uv run python -m agent.backtest --days 14 --interval 1h
+uv run python -m agent.backtest --days 60 --interval 4h --strategy mean_revert
+uv run python -m agent.backtest --days 3 --interval 1h --seed-store  # pre-warm live indicators
+```
 
 Every tick writes a decision record to `data/journal.jsonl`
 (inputs → signal → risk verdict → action) and every fill to
@@ -34,7 +53,8 @@ Every tick writes a decision record to `data/journal.jsonl`
 ## Status
 
 - [x] Paper-trading loop: CMC quotes + fear&greed → RSI/MACD momentum → risk gates → simulated fills
-- [ ] TWAK execution on BSC testnet (Day 3–4)
-- [ ] Backtest harness vs CMC historical data (Day 5–6)
+- [x] TWAK execution layer: CLI wrapper, swap quotes verified live, token-risk gate, agent wallet created
+- [x] Backtest harness (Binance klines through the live strategy/risk/execution components)
 - [ ] BNB AI Agent SDK: ERC-8004 identity (Day 7)
-- [ ] Mainnet dry-run + dashboard (Day 8)
+- [ ] Mainnet dry-run with ~$20 + observability dashboard (Day 8)
+- [ ] Fund agent wallet `0x2c909Ea17750F574C81f14A96291BA5779E5736f` (BSC) with $100–200 + gas BNB

@@ -31,17 +31,25 @@ def rsi(values: list[float], period: int = 14) -> float | None:
     return 100.0 - 100.0 / (1.0 + rs)
 
 
-def macd_histogram(
+def macd_histogram_series(
     values: list[float], fast: int = 12, slow: int = 26, signal: int = 9
-) -> float | None:
-    """Latest MACD histogram value (MACD line - signal line); None if short."""
+) -> list[float]:
+    """MACD histogram (MACD line - signal line) per bar; [] if not enough data."""
     if len(values) < slow + signal:
-        return None
+        return []
     ema_fast = ema(values, fast)
     ema_slow = ema(values, slow)
     # align: ema_slow starts (slow - fast) bars later than ema_fast
     macd_line = [f - s for f, s in zip(ema_fast[slow - fast:], ema_slow)]
     signal_line = ema(macd_line, signal)
     if not signal_line:
-        return None
-    return macd_line[-1] - signal_line[-1]
+        return []
+    return [m - s for m, s in zip(macd_line[signal - 1:], signal_line)]
+
+
+def macd_histogram(
+    values: list[float], fast: int = 12, slow: int = 26, signal: int = 9
+) -> float | None:
+    """Latest MACD histogram value; None if not enough history."""
+    series = macd_histogram_series(values, fast, slow, signal)
+    return series[-1] if series else None

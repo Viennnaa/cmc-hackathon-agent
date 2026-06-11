@@ -30,6 +30,10 @@ UNIVERSE = ["BNB", "BTC", "ETH"]
 QUOTE_ASSET = "USDT"
 
 # --- Strategy parameters ------------------------------------------------------
+# Bar size chosen empirically: 15m churned 38-48 round trips/14d and lost
+# ~10% to fees; 1h cut that to 5-10 trips with max drawdown under 2.1%.
+BAR_SECONDS = 3600           # indicators run on 1h bar closes (live + backtest)
+REENTRY_COOLDOWN_SECONDS = 8 * BAR_SECONDS  # no re-entry for 8 bars after any exit
 RSI_PERIOD = 14
 RSI_ENTRY_MIN = 50.0   # enter only with momentum confirmed...
 RSI_ENTRY_MAX = 70.0   # ...but not overbought
@@ -39,6 +43,7 @@ MACD_SLOW = 26
 MACD_SIGNAL = 9
 MIN_HISTORY = MACD_SLOW + MACD_SIGNAL  # bars needed before signals are valid
 FEAR_GREED_VETO_BELOW = 20  # extreme fear -> no new entries (sentiment veto)
+REGIME_MIN_24H_CHANGE = 1.0  # long-only: require 24h trend >= +1% to enter (CMC field)
 
 # --- Paper execution model ----------------------------------------------------
 PAPER_FEE_PCT = 0.0025      # PancakeSwap v2 LP fee

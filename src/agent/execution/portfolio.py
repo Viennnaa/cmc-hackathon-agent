@@ -42,12 +42,15 @@ class Portfolio:
         )
         return self.cash + held
 
-    def mark(self, prices: dict[str, float]) -> None:
-        """Update marks, peak equity, and roll the daily window at UTC midnight."""
+    def mark(self, prices: dict[str, float], ts: float | None = None) -> None:
+        """Update marks, peak equity, and roll the daily window at UTC midnight.
+
+        `ts` defaults to wall clock; backtests pass simulated time.
+        """
         self.last_prices.update(prices)
         eq = self.equity()
         self.peak_equity = max(self.peak_equity, eq)
-        now = time.time()
+        now = ts or time.time()
         if time.gmtime(now).tm_yday != time.gmtime(self.day_start_ts).tm_yday:
             self.day_start_equity = eq
             self.day_start_ts = now

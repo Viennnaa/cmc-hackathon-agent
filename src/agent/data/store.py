@@ -5,6 +5,7 @@ free CMC tier has no historical OHLCV endpoint.
 """
 
 import sqlite3
+import time
 from pathlib import Path
 
 
@@ -36,6 +37,22 @@ class PriceStore:
             (symbol, limit),
         ).fetchall()
         return [r[0] for r in reversed(rows)]
+
+    def bars(self, symbol: str, bar_seconds: int, limit: int = 200) -> list[float]:
+        """Bar closes (last sample per bucket), oldest first.
+
+        The current, still-forming bucket is excluded so signals only ever
+        fire on completed bars — same semantics as backtest candles.
+        """
+        rows = self._conn.execute(
+            """SELECT CAST(ts / ? AS INTEGER) AS bucket, price, MAX(ts)
+               FROM prices WHERE symbol = ?
+               GROUP BY bucket ORDER BY bucket DESC LIMIT ?""",
+            (bar_seconds, symbol, limit + 1),
+        ).fetchall()
+        current_bucket = int(time.time() // bar_seconds)
+        closes = [r[1] for r in rows if r[0] != current_bucket]
+        return list(reversed(closes[:limit]))
 
     def count(self, symbol: str) -> int:
         return self._conn.execute(

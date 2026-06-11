@@ -46,6 +46,8 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
         for sym in list(portfolio.positions):
             if sym in quotes:
                 journal.fill(executor.sell(portfolio, sym, quotes[sym].price))
+                risk.note_exit(sym)
+        portfolio.save(PORTFOLIO_PATH)
         return
 
     for sym, q in quotes.items():
@@ -55,10 +57,13 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
             sig = momentum.Signal(sym, "exit", "overridden by stop_loss")
             journal.decision(sym, q, sig, stop, fear_greed, portfolio.equity())
             journal.fill(executor.sell(portfolio, sym, q.price))
+            risk.note_exit(sym)
             log.info("%s STOP-LOSS exit @ %.4f", sym, q.price)
             continue
 
-        sig = momentum.evaluate(sym, store.series(sym), sym in portfolio.positions, fear_greed)
+        bars = store.bars(sym, config.BAR_SECONDS)
+        sig = momentum.evaluate(sym, bars, sym in portfolio.positions, fear_greed,
+                                change_24h=q.percent_change_24h)
         verdict = risk.review(sig.action, sym, portfolio)
         journal.decision(sym, q, sig, verdict, fear_greed, portfolio.equity())
 
@@ -74,6 +79,7 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
         elif verdict.approved and verdict.action == "exit" and sym in portfolio.positions:
             fill = executor.sell(portfolio, sym, q.price)
             journal.fill(fill)
+            risk.note_exit(sym)
             log.info("%s EXIT @ %.4f pnl=%.4f (%s)", sym, fill.price, fill.pnl_usdt, sig.reason)
 
     portfolio.save(PORTFOLIO_PATH)
