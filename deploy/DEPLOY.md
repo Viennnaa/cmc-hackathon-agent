@@ -63,6 +63,27 @@ journalctl -u cmc-agent -f          # expect: "starting in paper mode | …"
 ssh -L 8765:127.0.0.1:8765 agent@<IP>   # then open http://localhost:8765
 ```
 
+## Updating code on a deployed box
+
+```bash
+rsync -av --exclude .venv --exclude __pycache__ --exclude .git \
+  --exclude '/data/' --exclude .env --exclude .pytest_cache \
+  ~/projects/cmc-hackathon-agent/ root@<IP>:/home/agent/cmc-hackathon-agent/
+ssh root@<IP> 'chown -R agent:agent /home/agent/cmc-hackathon-agent \
+  && sudo -u agent bash -c "cd ~/cmc-hackathon-agent \
+       && ~/.local/bin/uv run python -m pytest -q" \
+  && systemctl restart cmc-agent cmc-dashboard'
+```
+
+Gotchas learned the hard way (2026-06-12):
+- `/data/` must be ANCHORED (leading slash). A bare `--exclude data` also
+  matches `src/agent/data/` and silently ships a half-updated package.
+- `restart`, never `start` — `start` on a running unit is a silent no-op
+  and the old process keeps trading the old strategy.
+- The live log is `journalctl -u cmc-agent`. `data/agent.log` on the VPS is
+  a stale copy of the laptop's nohup log from the initial rsync (the systemd
+  unit logs to journald only) — do not tail it to verify a deploy.
+
 ## Timeline
 
 - **~Jun 18** — fund the NEW wallet address with $20 USDT (BSC), flip
