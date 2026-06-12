@@ -105,7 +105,11 @@ class RiskEngine:
         return None
 
     # --- gate on strategy intents --------------------------------------------
-    def review(self, intent: str, symbol: str, portfolio: Portfolio, now: float | None = None) -> Verdict:
+    def review(self, intent: str, symbol: str, portfolio: Portfolio, now: float | None = None,
+               fear_greed: int | None = None) -> Verdict:
+        """fear_greed is engine-enforced (not just strategy convention): the
+        declared "F&G < 20 -> no new entries" rule must hold for EVERY
+        strategy, and an unavailable reading fails closed."""
         now = now or time.time()
 
         if self.killed:
@@ -118,6 +122,13 @@ class RiskEngine:
         if now < self.halted_until:
             remaining = (self.halted_until - now) / 3600
             return Verdict(False, "none", "daily_halt", f"halted for another {remaining:.1f}h")
+        if fear_greed is None:
+            return Verdict(False, "none", "sentiment_veto",
+                           "fear&greed unavailable -> no new entries (fail closed)")
+        if fear_greed < config.FEAR_GREED_VETO_BELOW:
+            return Verdict(False, "none", "sentiment_veto",
+                           f"fear&greed {fear_greed} < {config.FEAR_GREED_VETO_BELOW} "
+                           "extreme fear -> no new entries")
         if symbol in portfolio.positions:
             return Verdict(False, "none", "single_position", f"already holding {symbol}")
         if len(portfolio.positions) >= config.MAX_CONCURRENT_POSITIONS:

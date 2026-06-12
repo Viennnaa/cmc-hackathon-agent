@@ -8,8 +8,11 @@ the runner is mode-agnostic.
 Docs: https://developer.trustwallet.com/developer/agent-sdk/cli-reference
 
 Quotes and risk checks need no wallet password; swap execution resolves the
-password from the OS keychain or TWAK_WALLET_PASSWORD (never passed by us
-on the command line).
+password from the OS keychain or TWAK_WALLET_PASSWORD. Headless Linux needs
+the --password flag (env passthrough unverified — dry-run checklist item),
+so every error path MUST go through _redact/_sanitize: a raw argv in an
+exception would propagate to the journal, the dashboard, and the narrator's
+Anthropic calls, and data/ ships in the submission artifacts.
 """
 
 import json
@@ -55,15 +58,40 @@ class TwakError(RuntimeError):
     pass
 
 
+def _redact(args: list[str]) -> list[str]:
+    """argv copy safe for logs/exceptions: the value after --password is masked."""
+    out = list(args)
+    for i, a in enumerate(out):
+        if a == "--password" and i + 1 < len(out):
+            out[i + 1] = "***"
+    return out
+
+
+def _sanitize(text: str) -> str:
+    """Mask the wallet password anywhere in CLI output (e.g. an argv echo)."""
+    password = os.getenv("TWAK_WALLET_PASSWORD", "")
+    return text.replace(password, "***") if password else text
+
+
 def _run(args: list[str], timeout: int = 120) -> dict:
     cmd = TWAK_CMD + args + ["--json"]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    shown = " ".join(_redact(args))
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # TimeoutExpired.cmd holds the unredacted argv — raising outside the
+        # except block leaves no __context__/__cause__ chain to leak it
+        # through tracebacks/journal via log.exception
+        proc = None
+    if proc is None:
+        raise TwakError(f"twak {shown} timed out after {timeout}s")
     if proc.returncode != 0:
-        raise TwakError(f"twak {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
+        detail = _sanitize(proc.stderr.strip() or proc.stdout.strip())
+        raise TwakError(f"twak {shown} failed: {detail}")
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as e:
-        raise TwakError(f"twak {' '.join(args)} returned non-JSON: {proc.stdout[:200]}") from e
+        raise TwakError(f"twak {shown} returned non-JSON: {_sanitize(proc.stdout)[:200]}") from e
 
 
 def _amount(value) -> float:
@@ -80,19 +108,33 @@ def _amount(value) -> float:
     return float(str(value).split()[0])
 
 
-def find_usdt_balance(data) -> float | None:
-    """Best-effort USDT balance from `twak wallet portfolio` output.
+# wallet-side symbols per universe symbol: pegged tokens may report under
+# their BEP-20 name (BTC trades and shows up as BTCB)
+WALLET_SYMBOLS = {
+    "USDT": ("USDT",),
+    "BNB": ("BNB",),
+    "BTC": ("BTC", "BTCB"),
+    "ETH": ("ETH",),
+    "SOL": ("SOL",),
+    "XRP": ("XRP",),
+    "CAKE": ("CAKE",),
+}
+
+
+def find_balance(data, symbols: tuple[str, ...]) -> float | None:
+    """Best-effort balance for any of `symbols` from `twak wallet portfolio` output.
 
     The exact shape is verified on the dry run; this walks the structure for
-    any node claiming symbol USDT with a balance-like field. Callers fail
-    closed (refuse to trade live) when this returns None.
+    any node claiming a matching symbol with a balance-like field. Callers
+    fail closed (refuse to trade live) when this returns None.
     """
+    wanted = {s.upper() for s in symbols}
     stack = [data]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
             sym = str(node.get("symbol") or node.get("token") or node.get("asset") or "").upper()
-            if sym == "USDT":
+            if sym in wanted:
                 for key in ("balance", "amount", "quantity", "value"):
                     if node.get(key) is not None:
                         try:
@@ -103,6 +145,10 @@ def find_usdt_balance(data) -> float | None:
         elif isinstance(node, list):
             stack.extend(node)
     return None
+
+
+def find_usdt_balance(data) -> float | None:
+    return find_balance(data, WALLET_SYMBOLS["USDT"])
 
 
 class TwakClient:
@@ -183,7 +229,9 @@ class TwakExecutor:
         # quote-only confirmed to use "output". Fall back to minReceived.
         qty = _amount(result.get("output") or result.get("minReceived"))
         if qty <= 0:
-            raise TwakError(f"swap returned no output amount: {result}")
+            # sanitize: exit-0-but-malformed output is exactly where a CLI
+            # might echo its own (password-bearing) invocation back
+            raise TwakError(f"swap returned no output amount: {_sanitize(str(result))}")
         price = size_usdt / qty
         portfolio.cash -= size_usdt
         portfolio.positions[symbol] = Position(symbol, qty, price, time.time())
@@ -196,7 +244,7 @@ class TwakExecutor:
         proceeds = _amount(result.get("output") or result.get("minReceived"))
         if proceeds <= 0:
             portfolio.positions[symbol] = pos  # restore; swap did not fill
-            raise TwakError(f"swap returned no output amount: {result}")
+            raise TwakError(f"swap returned no output amount: {_sanitize(str(result))}")
         portfolio.cash += proceeds
         price = proceeds / pos.qty
         pnl = proceeds - pos.qty * pos.entry_price

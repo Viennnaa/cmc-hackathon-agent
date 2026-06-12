@@ -6,9 +6,41 @@ must capture *why* even when the action is "hold".
 """
 
 import json
+import os
 import time
 from dataclasses import asdict
 from pathlib import Path
+
+
+def read_jsonl_tail(path: Path, limit: int) -> list[dict]:
+    """Last `limit` records, reading blocks from EOF — the journal grows
+    unbounded over the window, so hot paths (narrator, dashboard) must not
+    slurp the whole file every poll. Torn/corrupt lines are skipped."""
+    if not path.exists():
+        return []
+    chunk = 64 * 1024
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        # accumulate chunks and join once: prepending to one buffer re-copies
+        # it per chunk (quadratic — ~3.6x slower at a 20k-line tail)
+        parts: list[bytes] = []
+        newlines = 0
+        while pos > 0 and newlines <= limit:
+            step = min(chunk, pos)
+            pos -= step
+            f.seek(pos)
+            part = f.read(step)
+            parts.append(part)
+            newlines += part.count(b"\n")
+    buf = b"".join(reversed(parts))
+    out = []
+    for line in buf.splitlines():
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue  # torn/corrupt line must not cost a valid record below
+    return out[-limit:]
 
 
 class Journal:

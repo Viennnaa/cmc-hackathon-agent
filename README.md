@@ -25,13 +25,17 @@ uv run pytest                          # tests
 | Rule | Threshold | Consequence |
 |---|---|---|
 | Position sizing | max 20% of equity | entry rejected/resized |
-| Stop-loss | −3% per trade | forced exit, outranks strategy |
+| Stop-loss | −3% trigger per trade | forced exit, outranks strategy |
 | Daily loss cap | −5% on the day | flatten all + halt 24h |
 | Kill switch | −10% drawdown from peak | flatten all + permanent stop |
 | Token risk | TWAK security check (fail closed) | entry vetoed |
 | Re-entry cooldown | 8h after any exit per symbol | entry rejected (anti-churn) |
-| Sentiment veto | CMC Fear & Greed < 20 | no new entries |
-| Regime filter | CMC 24h change < +1% | no new entries (long-only) |
+| Sentiment veto | CMC Fear & Greed < 20 *or unavailable* | no new entries — enforced in the risk engine for every strategy |
+| Regime filter | CMC 24h change < +1% | no new *momentum* entries (mean-reversion deliberately buys red days; its downside is bounded by the stop-loss and knife filter) |
+
+Stop-loss note for the replay: −3% is the *trigger*; the realized loss on a
+stopped trade is ~3.4–3.8% after slippage and swap fees. The journal records
+both the trigger decision and the fill.
 
 ## Adaptation: regime router + nightly self-review
 
@@ -68,6 +72,20 @@ uv run python -m agent.backtest --days 3 --interval 1h --seed-store  # pre-warm 
 Every tick writes a decision record to `data/journal.jsonl`
 (inputs → signal → risk verdict → action) and every fill to
 `data/ledger.jsonl` — the artifacts judges replay for rule adherence.
+
+## Adversarial reviews & hardening
+
+The agent went through two independent adversarial reviews before the live
+window: an OpenAI Codex pass focused on crash safety, and a full independent
+Claude review (secrets across git history, real-money loss paths, LLM
+containment) on 2026-06-12. Everything found was fixed and pinned by tests:
+crash-safe order intents that survive restarts, the sentiment veto and quote
+plausibility quarantine enforced in the risk engine / data layer rather than
+by convention, wallet-password redaction on every error path, gas-balance
+gates so exits stay fundable, wallet-vs-state verification on live restarts,
+and Telegram alerts on every deliberate halt. The review reports themselves
+stay out of the repo (they narrate deployment internals); the guard tests in
+`tests/test_safety_guards.py` are the durable artifact.
 
 ## Status
 

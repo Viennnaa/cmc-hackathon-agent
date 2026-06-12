@@ -94,6 +94,10 @@ def maybe_review(state: StrategyState, store: PriceStore, journal: Journal,
 
     from agent.backtest import run_backtest  # deferred: keeps runner import light
 
+    # NOTE: run_backtest aligns symbols by timestamp intersection (2026-06-12);
+    # the first review after that change replays a different bar set than the
+    # old index alignment, so a one-time scorecard jump is expected, not state
+    # corruption.
     results = {}
     for name in STRATEGIES:
         report = run_backtest(series, _REPLAY_CAPITAL,

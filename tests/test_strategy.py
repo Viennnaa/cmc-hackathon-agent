@@ -72,7 +72,8 @@ def test_reentry_cooldown_blocks_then_expires():
     engine = RiskEngine()
     now = time.time()
     engine.note_exit("BNB", now=now)
-    blocked = engine.review("enter", "BNB", p, now=now + 60)
+    blocked = engine.review("enter", "BNB", p, now=now + 60, fear_greed=50)
     assert not blocked.approved and blocked.rule == "reentry_cooldown"
-    allowed = engine.review("enter", "BNB", p, now=now + config.REENTRY_COOLDOWN_SECONDS + 1)
+    allowed = engine.review("enter", "BNB", p, now=now + config.REENTRY_COOLDOWN_SECONDS + 1,
+                            fear_greed=50)
     assert allowed.approved

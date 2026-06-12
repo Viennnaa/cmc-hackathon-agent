@@ -16,6 +16,7 @@ import time
 
 from agent import config
 from agent.execution.portfolio import Portfolio
+from agent.record.journal import read_jsonl_tail
 from agent.risk.engine import RiskEngine
 
 log = logging.getLogger("agent.narrator")
@@ -38,19 +39,12 @@ SYSTEM = (
 _state = {"last_ts": 0.0, "fills_seen": -1, "events_seen": -1}
 
 
-def _read_jsonl_tail(path, limit: int) -> list[dict]:
-    if not path.exists():
-        return []
-    out = []
-    for line in path.read_text().strip().splitlines()[-limit:]:
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+# the journal grows unbounded over the window — tail from EOF, never slurp
+_read_jsonl_tail = read_jsonl_tail
 
 
 def _count_lines(path) -> int:
+    """Ledger line count (fills only — stays small enough to read whole)."""
     if not path.exists():
         return 0
     return len(path.read_text().strip().splitlines())

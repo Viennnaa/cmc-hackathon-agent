@@ -14,26 +14,24 @@ from pathlib import Path
 
 from agent import config
 from agent.narrator import NARRATION_PATH
+from agent.record.journal import read_jsonl_tail
 from agent.runner import JOURNAL_PATH, LEDGER_PATH, PORTFOLIO_PATH
 
 PORT = 8765
 
+# enough journal tail for a multi-day equity curve (6 symbols x 60s polls
+# ≈ 8.6k lines/day) without slurping the whole unbounded file every 5s poll
+JOURNAL_TAIL_LINES = 20_000
+EQUITY_MAX_POINTS = 600
+
 
 def _read_jsonl(path: Path, limit: int = 200) -> list[dict]:
-    if not path.exists():
-        return []
-    out = []
-    for line in path.read_text().strip().splitlines()[-limit:]:
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue  # a torn tail write must not take down /api/state
-    return out
+    return read_jsonl_tail(path, limit)  # torn tail writes are skipped inside
 
 
 def state() -> dict:
     portfolio = json.loads(PORTFOLIO_PATH.read_text()) if PORTFOLIO_PATH.exists() else {}
-    journal = _read_jsonl(JOURNAL_PATH)
+    journal = _read_jsonl(JOURNAL_PATH, limit=JOURNAL_TAIL_LINES)
     ledger = _read_jsonl(LEDGER_PATH, limit=100)
 
     rule_counts: dict[str, int] = {}
@@ -52,14 +50,36 @@ def state() -> dict:
         elif "event" in rec:
             rule_counts[rec["event"]] = rule_counts.get(rec["event"], 0) + 1
 
+    # full-resolution drawdown BEFORE downsampling: the client only sees a
+    # downsampled curve and would miss intra-gap troughs on the headline KPI
+    peak, dd = float("-inf"), 0.0
+    for pt in equity_series:
+        peak = max(peak, pt["equity"])
+        if peak > 0:
+            dd = max(dd, (peak - pt["equity"]) / peak)
+    drawdown_samples = len(equity_series)
+
+    # downsample for the chart: judges care about the whole window's shape
+    # (return + max drawdown), not per-tick noise
+    if len(equity_series) > EQUITY_MAX_POINTS:
+        step = -(-len(equity_series) // EQUITY_MAX_POINTS)
+        equity_series = equity_series[::step] + [equity_series[-1]]
+
+    # judged return baseline: live_rebase wallet amount once live, else the
+    # configured starting capital (pre-upgrade state files lack the field)
+    baseline = portfolio.get("baseline_equity") or config.get_settings().starting_capital
+
     return {
         "now": time.time(),
         "mode": config.get_settings().mode,
         "universe": config.UNIVERSE,
         "portfolio": portfolio,
+        "baseline": round(baseline, 2),
+        "max_drawdown_pct": round(dd * 100, 2),
+        "drawdown_samples": drawdown_samples,
         "fear_greed": fear_greed,
         "rule_counts": rule_counts,
-        "equity_series": equity_series[-500:],
+        "equity_series": equity_series,
         "decisions": [r for r in journal if "signal" in r][-40:][::-1],
         "fills": ledger[::-1],
         "narration": _read_jsonl(NARRATION_PATH, limit=8)[::-1],
@@ -167,7 +187,7 @@ PAGE = """<!doctype html>
 </div>
 
 <div class="card table-card">
-  <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">counts since journal start</span></div>
+  <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">counts over recent journal</span></div>
   <div class="pad gates" id="rules"></div>
 </div>
 
@@ -193,7 +213,7 @@ PAGE = """<!doctype html>
 <footer>Deterministic strategy core &middot; hard risk gates &middot; full decision log &mdash; this dashboard reads journal.jsonl, ledger.jsonl and portfolio.json directly; it is a view, never a second source of truth.</footer>
 </div>
 <script>
-const START = 150;
+let BASELINE = 150;  // judged baseline; replaced by /api/state's value
 const VETO_RULES = ['token_risk_veto','stop_loss','kill_switch','daily_loss_cap','reentry_cooldown'];
 const SHIELD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
 let lastFetch = 0, lastState = null, pts = [];
@@ -218,11 +238,12 @@ function maxDrawdown(vals) {
 function render(s) {
   const p = s.portfolio || {};
   const positions = Object.keys(p.positions || {});
+  if (s.baseline) BASELINE = s.baseline;
   const es = s.equity_series;
   const vals = es.map(e => e.equity);
   const eq = vals.length ? vals[vals.length - 1] : (p.cash || 0);
-  const ret = (eq - START) / START * 100;
-  const dd = vals.length ? maxDrawdown(vals) : 0;
+  const ret = (eq - BASELINE) / BASELINE * 100;
+  const dd = s.max_drawdown_pct ?? (vals.length ? maxDrawdown(vals) : 0);
   const fg = s.fear_greed;
   const [zone, zcol] = fg != null ? fgZone(fg) : ['no reading yet', 'var(--fg2)'];
 
@@ -232,10 +253,10 @@ function render(s) {
 
   document.getElementById('cards').innerHTML = [
     {l:'Equity', v:`${eq.toFixed(2)}<span class="unit">USDT</span>`, s:`peak ${(p.peak_equity ?? eq).toFixed(2)}`},
-    {l:'Return', v:`${ret >= 0 ? '+' : ''}${ret.toFixed(2)}<span class="unit">%</span>`, c:ret >= 0 ? 'pos' : 'neg', s:`since start &middot; ${START} USDT`},
+    {l:'Return', v:`${ret >= 0 ? '+' : ''}${ret.toFixed(2)}<span class="unit">%</span>`, c:ret >= 0 ? 'pos' : 'neg', s:`since baseline &middot; ${BASELINE} USDT`},
     {l:'Cash', v:`${(p.cash ?? 0).toFixed(2)}<span class="unit">USDT</span>`, s:positions.length ? `${(eq - (p.cash ?? 0)).toFixed(2)} deployed` : 'fully in cash'},
     {l:'Open positions', v:String(positions.length), s:positions.length ? esc(positions.join(' · ')) : 'flat &mdash; waiting for signal'},
-    {l:'Max drawdown', v:`${dd.toFixed(2)}<span class="unit">%</span>`, c:dd > 5 ? 'neg' : '', s:`across ${vals.length} samples`},
+    {l:'Max drawdown', v:`${dd.toFixed(2)}<span class="unit">%</span>`, c:dd > 5 ? 'neg' : '', s:`full-res over ${s.drawdown_samples ?? vals.length} samples`},
     {l:'Fear &amp; Greed', v:fg ?? '&mdash;', s:`<span style="color:${zcol}">${zone}</span>`,
      extra:fg != null ? `<div class="gauge" aria-hidden="true"><i style="left:${Math.min(Math.max(fg, 0), 100)}%"></i></div>` : ''},
   ].map(k => `<div class="card kpi ${k.c || ''}"><div class="l">${k.l}</div><div class="v num">${k.v}</div><div class="s">${k.s}</div>${k.extra || ''}</div>`).join('');
@@ -292,7 +313,7 @@ function drawChart(es) {
 
   const PL = 56, PR = 12, PT = 12, PB = 24;
   const vals = es.map(e => e.equity);
-  let lo = Math.min(...vals, START), hi = Math.max(...vals, START);
+  let lo = Math.min(...vals, BASELINE), hi = Math.max(...vals, BASELINE);
   const margin = Math.max((hi - lo) * 0.12, 0.4);
   lo -= margin; hi += margin;
   const X = i => PL + i / (es.length - 1) * (w - PL - PR);
@@ -307,11 +328,11 @@ function drawChart(es) {
     x.fillStyle = '#7C8CA5'; x.fillText(v.toFixed(1), PL - 8, y);
   }
 
-  const by = Y(START);
+  const by = Y(BASELINE);
   x.setLineDash([4, 4]); x.strokeStyle = 'rgba(148,163,184,.55)';
   x.beginPath(); x.moveTo(PL, by); x.lineTo(w - PR, by); x.stroke();
   x.setLineDash([]);
-  x.textAlign = 'left'; x.fillStyle = '#94A3B8'; x.fillText('start ' + START, PL + 4, by - 9);
+  x.textAlign = 'left'; x.fillStyle = '#94A3B8'; x.fillText('baseline ' + BASELINE, PL + 4, by - 9);
 
   const grad = x.createLinearGradient(0, PT, 0, H - PB);
   grad.addColorStop(0, 'rgba(245,158,11,.25)'); grad.addColorStop(1, 'rgba(245,158,11,0)');

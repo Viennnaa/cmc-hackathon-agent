@@ -6,6 +6,8 @@ so the agent builds its own price series by sampling quotes every poll
 backfill from /v2/cryptocurrency/ohlcv/historical without touching callers.
 """
 
+import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +15,8 @@ from datetime import datetime
 import requests
 
 from agent import config
+
+log = logging.getLogger("agent.cmc")
 
 BASE_URL = "https://pro-api.coinmarketcap.com"
 
@@ -49,6 +53,10 @@ class CMCClient:
             "X-CMC_PRO_API_KEY": api_key,
             "Accept": "application/json",
         })
+        # plausibility state (in-memory: after a restart the first poll
+        # re-baselines, which matches today's trust-first-sample behavior)
+        self._last_accepted: dict[str, float] = {}
+        self._suspect: dict[str, float] = {}
 
     def _get(self, path: str, params: dict) -> dict:
         try:
@@ -67,6 +75,31 @@ class CMCClient:
             )
         return body["data"]
 
+    def _implausible(self, sym: str, price: float) -> str | None:
+        """Reason to quarantine this quote, or None to accept it.
+
+        A glitched sample (null/zero/spike) flowing into Portfolio.mark would
+        permanently inflate peak_equity or fire every stop-loss at once, so a
+        price jumping more than QUOTE_MAX_JUMP_PCT from the last accepted
+        sample is held back until a second consecutive poll agrees.
+        """
+        if not math.isfinite(price) or price <= 0:
+            return f"non-positive price {price!r}"
+        last = self._last_accepted.get(sym)
+        if last is None:
+            return None
+        jump = abs(price - last) / last
+        if jump <= config.QUOTE_MAX_JUMP_PCT:
+            self._suspect.pop(sym, None)
+            return None
+        suspect = self._suspect.get(sym)
+        if suspect is not None and abs(price - suspect) / suspect <= config.QUOTE_CONFIRM_TOLERANCE_PCT:
+            self._suspect.pop(sym, None)  # two consecutive polls agree: real move
+            return None
+        self._suspect[sym] = price
+        return (f"price {price} jumped {jump:.1%} from last accepted {last} "
+                "(quarantined until a second poll confirms)")
+
     def quotes(self, symbols: list[str], convert: str = "USDT") -> dict[str, Quote]:
         data = self._get(
             "/v2/cryptocurrency/quotes/latest",
@@ -84,9 +117,15 @@ class CMCClient:
             source_ts = _parse_iso(q.get("last_updated"))
             if source_ts is not None and now - source_ts > config.STALE_QUOTE_MAX_AGE_SECONDS:
                 continue
+            price = float(q["price"]) if q.get("price") is not None else float("nan")
+            quarantine = self._implausible(sym, price)
+            if quarantine:
+                log.warning("%s quote dropped: %s", sym, quarantine)
+                continue
+            self._last_accepted[sym] = price
             out[sym] = Quote(
                 symbol=sym,
-                price=q["price"],
+                price=price,
                 volume_24h=q.get("volume_24h") or 0.0,
                 percent_change_24h=q.get("percent_change_24h") or 0.0,
                 timestamp=now,

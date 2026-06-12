@@ -109,13 +109,21 @@ def run_backtest(series: dict[str, list[tuple[float, float]]],
     executor = PaperExecutor()
     report = Report(starting_capital=starting_capital)
 
-    # align on the shortest series; assume identical candle grid across pairs
-    n = min(len(s) for s in series.values())
+    # Align bars across symbols by timestamp, not position: the live store
+    # has per-symbol gaps (dropped stale quotes), so the i-th bars of two
+    # symbols can be hours apart. Replay only timestamps every symbol has.
+    if not series or any(not s for s in series.values()):
+        report.final_equity = portfolio.equity()
+        return report
+    common_ts = sorted(set.intersection(*({ts for ts, _ in s} for s in series.values())))
+    if not common_ts:
+        report.final_equity = portfolio.equity()
+        return report
+    price_at = {sym: dict(s) for sym, s in series.items()}
     window: dict[str, list[float]] = {sym: [] for sym in series}
 
-    for i in range(n):
-        ts = series[next(iter(series))][i][0]
-        prices = {sym: series[sym][i][1] for sym in series}
+    for ts in common_ts:
+        prices = {sym: price_at[sym][ts] for sym in series}
         for sym, px in prices.items():
             window[sym].append(px)
         portfolio.mark(prices, ts=ts)
@@ -158,7 +166,12 @@ def run_backtest(series: dict[str, list[tuple[float, float]]],
             )
             if sig.reason.startswith("sentiment veto"):
                 report._fired("sentiment_veto")
-            verdict = risk.review(sig.action, sym, portfolio, now=ts)
+            # The engine fails closed on a missing F&G reading (live rule), but
+            # historical F&G is variant-controlled here: feed it the same
+            # veto_fng the strategy saw, neutral 50 otherwise, so each
+            # fng_mode variant keeps its intended semantics.
+            verdict = risk.review(sig.action, sym, portfolio, now=ts,
+                                  fear_greed=veto_fng if veto_fng is not None else 50)
             if verdict.approved and verdict.action == "enter":
                 size = verdict.size_usdt
                 if (fng_mode == "halfsize" and fng is not None
@@ -171,7 +184,8 @@ def run_backtest(series: dict[str, list[tuple[float, float]]],
                 risk.note_exit(sym, now=ts)
                 report.trades += 1
                 report.wins += fill.pnl_usdt > 0
-            elif not verdict.approved and verdict.rule in ("daily_halt", "kill_switch"):
+            elif not verdict.approved and verdict.rule in ("daily_halt", "kill_switch",
+                                                           "sentiment_veto"):
                 report._fired(verdict.rule)
 
         eq = portfolio.equity()
@@ -179,7 +193,7 @@ def run_backtest(series: dict[str, list[tuple[float, float]]],
         report.max_drawdown_pct = max(report.max_drawdown_pct, dd)
 
     # liquidate remainder for a clean final number
-    last = {sym: series[sym][n - 1][1] for sym in series}
+    last = {sym: price_at[sym][common_ts[-1]] for sym in series}
     for sym in list(portfolio.positions):
         fill = executor.sell(portfolio, sym, last[sym])
         report.trades += 1

@@ -12,10 +12,13 @@ Crash-safety contract (judged: rules must hold across restarts):
 """
 
 import argparse
+import json
 import logging
+import os
+import socket
 import time
 
-from agent import config, narrator, review
+from agent import alerts, config, narrator, review
 from agent.data.cmc import CMCClient, CMCError
 from agent.data.store import PriceStore
 from agent.execution import pending
@@ -32,9 +35,33 @@ PRICES_PATH = config.DATA_DIR / "prices.sqlite"
 JOURNAL_PATH = config.DATA_DIR / "journal.jsonl"
 LEDGER_PATH = config.DATA_DIR / "ledger.jsonl"
 RISK_STATE_PATH = config.DATA_DIR / "risk_state.json"
+QUOTE_GAPS_PATH = config.DATA_DIR / "quote_gaps.json"
 
-# held symbol -> ts when its quotes first went missing (protective-exit timer)
+# held symbol -> ts when its quotes first went missing (protective-exit timer).
+# Persisted: a restart mid-outage must not reset the stop-loss-blind clock.
 _quote_gap_since: dict[str, float] = {}
+
+
+def _load_quote_gaps() -> dict[str, float]:
+    """Fail open to {} on ANY malformed content: a crash here happens before
+    the loop's try/except, and systemd would turn it into a 10s restart loop
+    with no ticks, no stop-losses, and no alert. Worst case of {} is the
+    stop-loss-blind clock restarting, which the gap guard re-arms next tick."""
+    try:
+        data = json.loads(QUOTE_GAPS_PATH.read_text())
+        if not isinstance(data, dict):
+            return {}
+        return {k: float(v) for k, v in data.items()
+                if isinstance(v, (int, float, str))}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _save_quote_gaps() -> None:
+    QUOTE_GAPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = QUOTE_GAPS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_quote_gap_since))
+    os.replace(tmp, QUOTE_GAPS_PATH)
 
 
 class UnreconciledOrderError(RuntimeError):
@@ -83,6 +110,11 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
     # stop-loss. Track the gap and exit protectively at the last mark
     # rather than sit exposed (fail closed).
     now = time.time()
+    gaps_before = dict(_quote_gap_since)
+    stale_exits: list[str] = []
+    for sym in list(_quote_gap_since):
+        if sym not in portfolio.positions:
+            _quote_gap_since.pop(sym)
     for sym in list(portfolio.positions):
         if sym in quotes:
             _quote_gap_since.pop(sym, None)
@@ -99,6 +131,11 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
             risk.note_exit(sym)
             risk.save(RISK_STATE_PATH)
             _quote_gap_since.pop(sym, None)
+            stale_exits.append(sym)
+    if _quote_gap_since != gaps_before:
+        _save_quote_gaps()
+    if stale_exits:  # alert last: never delay the exits or the gap-state persist
+        alerts.send(f"stale_data_exit: protective exit of {stale_exits} at last marks")
 
     # portfolio-level gates first (kill switch / daily cap flatten everything)
     flatten = risk.portfolio_gates(portfolio)
@@ -113,6 +150,9 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
             risk.note_exit(sym)
         risk.save(RISK_STATE_PATH)
         portfolio.save(PORTFOLIO_PATH)
+        # alert LAST: a hung network call before risk.save/the sells could
+        # leave the kill switch unpersisted or delay exits while exposed
+        alerts.send(f"RISK GATE {flatten.rule}: {flatten.detail}")
         return
 
     for sym, q in quotes.items():
@@ -131,7 +171,7 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
         evaluate = STRATEGIES[strategy_state.strategy]
         sig = evaluate(sym, bars, sym in portfolio.positions, fear_greed,
                        change_24h=q.percent_change_24h)
-        verdict = risk.review(sig.action, sym, portfolio)
+        verdict = risk.review(sig.action, sym, portfolio, fear_greed=fear_greed)
         journal.decision(sym, q, sig, verdict, fear_greed, portfolio.equity())
 
         if verdict.approved and verdict.action == "enter":
@@ -159,14 +199,21 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
 def _protective_flatten(executor, journal, portfolio: Portfolio, risk: RiskEngine,
                         reason: str) -> None:
     """Exit everything at last marks when prices can no longer be trusted."""
-    journal.event(reason, f"protective flatten of {list(portfolio.positions)} at last marks",
+    held = list(portfolio.positions)
+    journal.event(reason, f"protective flatten of {held} at last marks",
                   portfolio.equity())
-    for sym in list(portfolio.positions):
+    for sym in held:
         price = portfolio.last_prices.get(sym, portfolio.positions[sym].entry_price)
         _sell(executor, journal, portfolio, sym, price)
         risk.note_exit(sym)
     risk.save(RISK_STATE_PATH)
     portfolio.save(PORTFOLIO_PATH)
+    alerts.send(f"{reason}: protective flatten of {held}")  # alert last: never delay the exits
+
+
+def _refuse_live(msg: str) -> None:
+    alerts.send(f"LIVE START REFUSED: {msg}")
+    raise SystemExit(f"live reconcile failed — {msg}")
 
 
 def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
@@ -174,18 +221,34 @@ def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
 
     Sizing the judged 20%-per-position rule against stale local capital would
     silently violate it (e.g. $30 of a $100 wallet is 30%). Fail closed: live
-    trading never starts on an unreadable balance.
+    trading never starts on an unreadable balance, an unfundable exit (no
+    gas), a wallet that contradicts recorded positions, or a state file that
+    was live on another machine (double-trading guard).
     """
-    from agent.execution.twak import TwakError, find_usdt_balance
+    from agent.execution.twak import WALLET_SYMBOLS, TwakError, find_balance, find_usdt_balance
+
+    host = socket.gethostname()
+    if portfolio.mode == "live" and portfolio.live_host and portfolio.live_host != host:
+        _refuse_live(f"portfolio.json was live on '{portfolio.live_host}' but this is "
+                     f"'{host}' — two machines trading one wallet would double-trade. "
+                     "If the migration is intentional, edit live_host in portfolio.json.")
+
     try:
         data = client.portfolio()
     except TwakError as e:
-        raise SystemExit(f"live reconcile failed — cannot read wallet portfolio: {e}")
+        _refuse_live(f"cannot read wallet portfolio: {e}")
     usdt = find_usdt_balance(data)
     if usdt is None:
-        raise SystemExit(
-            "live reconcile failed — no USDT balance found in `twak wallet portfolio` "
-            f"output (verify shape on the dry run): {str(data)[:300]}")
+        _refuse_live("no USDT balance found in `twak wallet portfolio` "
+                     f"output (verify shape on the dry run): {str(data)[:300]}")
+
+    # Gas check: a stop-loss exit must always be fundable. BNB pays gas, so
+    # an empty gas tank means halting while still holding a position.
+    bnb = find_balance(data, WALLET_SYMBOLS["BNB"])
+    if bnb is None or bnb < config.MIN_GAS_BNB_START:
+        _refuse_live(f"gas check: BNB balance {bnb} below {config.MIN_GAS_BNB_START} "
+                     "minimum — exits would become unfundable mid-window. Fund gas BNB "
+                     "and restart.")
 
     if portfolio.mode != "live":
         # Entering the live window: the funded wallet is the judged baseline.
@@ -199,8 +262,12 @@ def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
         portfolio.peak_equity = usdt
         portfolio.day_start_equity = usdt
         portfolio.day_start_ts = time.time()
+        portfolio.baseline_equity = usdt
+        portfolio.live_host = host
         portfolio.mode = "live"
     elif not portfolio.positions:
+        if not portfolio.baseline_equity:  # pre-upgrade live state: backfill once
+            portfolio.baseline_equity = usdt
         if abs(usdt - portfolio.cash) > 0.5:
             log.warning("wallet USDT %.2f differs from local cash %.2f — adopting "
                         "wallet (peak/day baselines kept: fail closed)", usdt, portfolio.cash)
@@ -208,10 +275,35 @@ def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
                           f"cash {portfolio.cash:.2f} -> wallet {usdt:.2f}", usdt)
         portfolio.cash = usdt
     else:
-        log.warning("live restart holding %s — wallet token balances not auto-verified; "
-                    "check `twak wallet portfolio` matches portfolio.json",
-                    list(portfolio.positions))
+        # Live restart while holding: the wallet must actually hold what
+        # portfolio.json claims, or the eventual sell fails mid-window.
+        for sym, pos in portfolio.positions.items():
+            bal = find_balance(data, WALLET_SYMBOLS.get(sym, (sym,)))
+            if bal is None:
+                _refuse_live(f"wallet shows no {sym} balance but portfolio.json holds "
+                             f"{pos.qty} — reconcile manually before restarting.")
+            if abs(bal - pos.qty) > pos.qty * config.LIVE_QTY_MISMATCH_TOLERANCE:
+                _refuse_live(f"wallet {sym} balance {bal} vs recorded qty {pos.qty} differs "
+                             f"beyond {config.LIVE_QTY_MISMATCH_TOLERANCE:.0%} — reconcile "
+                             "manually before restarting.")
+        log.info("live restart holding %s — wallet balances match portfolio.json",
+                 list(portfolio.positions))
     portfolio.save(PORTFOLIO_PATH)
+
+
+def _check_gas(client, portfolio: Portfolio, journal: Journal) -> None:
+    """Hourly low-gas warning while live; failures never touch trading."""
+    from agent.execution.twak import WALLET_SYMBOLS, find_balance
+    try:
+        bnb = find_balance(client.portfolio(), WALLET_SYMBOLS["BNB"])
+        if bnb is None or bnb < config.LOW_GAS_BNB_WARN:
+            msg = (f"low gas: BNB balance {bnb} < {config.LOW_GAS_BNB_WARN} — exits may "
+                   "soon be unfundable, top up gas")
+            journal.event("low_gas_warning", msg, portfolio.equity())
+            log.warning(msg)
+            alerts.send(msg)
+    except Exception as e:  # noqa: BLE001 — a failed gas probe must not stop trading
+        log.warning("gas check failed: %s", e)
 
 
 def main() -> None:
@@ -229,13 +321,18 @@ def main() -> None:
         log.critical("pending_order.json exists — a previous order may have executed "
                      "on-chain without being recorded. Reconcile the wallet against "
                      "portfolio.json, delete the file, then restart (deploy/DEPLOY.md).")
+        alerts.send("start refused: pending_order.json exists — manual reconcile needed "
+                    "(deploy/DEPLOY.md)")
         raise SystemExit(0)
 
     risk = RiskEngine.load(RISK_STATE_PATH)
     if risk.killed:
         log.critical("kill switch is engaged (risk_state.json) — agent stays stopped. "
                      "This is the judged permanent stop; do not clear it mid-window.")
+        alerts.send("start refused: kill switch is engaged — agent stays stopped")
         raise SystemExit(0)
+
+    _quote_gap_since.update(_load_quote_gaps())
 
     portfolio = Portfolio.load(PORTFOLIO_PATH, settings.starting_capital)
     journal = Journal(JOURNAL_PATH, LEDGER_PATH)
@@ -266,10 +363,15 @@ def main() -> None:
              strategy_state.strategy, strategy_state.size_factor)
 
     cmc_down_since: float | None = None
+    last_gas_check = time.time()
     while True:
         try:
             tick(cmc, store, portfolio, risk, executor, journal, strategy_state)
             cmc_down_since = None
+            if settings.mode == "live" and \
+                    time.time() - last_gas_check >= config.GAS_CHECK_INTERVAL_SECONDS:
+                last_gas_check = time.time()
+                _check_gas(client, portfolio, journal)
             try:
                 review.maybe_review(strategy_state, store, journal, portfolio.equity())
             except Exception as e:  # noqa: BLE001 — a failed review keeps yesterday's strategy
@@ -289,6 +391,7 @@ def main() -> None:
                 _protective_flatten(executor, journal, portfolio, risk, "cmc_outage_exit")
         except UnreconciledOrderError as e:
             log.critical("%s", e)
+            alerts.send(f"agent halted: {e}")
             break
         except Exception as e:  # noqa: BLE001 — a crash mid-trade must stop, not loop
             log.exception("tick crashed")
@@ -299,12 +402,15 @@ def main() -> None:
             if pending.read() is not None:
                 log.critical("crashed with an order in flight — stopping for manual "
                              "reconcile (deploy/DEPLOY.md). NOT auto-retrying.")
+                alerts.send(f"agent halted: crashed with an order in flight "
+                            f"({type(e).__name__}: {e}) — manual reconcile needed")
                 break
             # state is consistent (no order was in flight): keep the loop alive
         if args.once:
             break
         if risk.killed:
             log.warning("kill switch engaged — agent stopped")
+            alerts.send("agent stopped: kill switch engaged (judged permanent stop)")
             break
         time.sleep(settings.poll_interval)
 

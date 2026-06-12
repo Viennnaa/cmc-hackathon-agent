@@ -12,7 +12,7 @@ def make_portfolio(cash=150.0):
 
 def test_entry_sized_at_20_pct():
     p = make_portfolio(150.0)
-    v = RiskEngine().review("enter", "BNB", p)
+    v = RiskEngine().review("enter", "BNB", p, fear_greed=50)
     assert v.approved
     assert abs(v.size_usdt - 30.0) < 1e-9
     assert v.rule == "position_sizing"
@@ -21,9 +21,29 @@ def test_entry_sized_at_20_pct():
 def test_no_double_position():
     p = make_portfolio()
     p.positions["BNB"] = Position("BNB", 0.05, 600.0, time.time())
-    v = RiskEngine().review("enter", "BNB", p)
+    v = RiskEngine().review("enter", "BNB", p, fear_greed=50)
     assert not v.approved
     assert v.rule == "single_position"
+
+
+def test_sentiment_veto_engine_enforced():
+    """Judged rule: F&G < 20 -> no new entries, for EVERY strategy (engine-level)."""
+    p = make_portfolio(150.0)
+    v = RiskEngine().review("enter", "BNB", p, fear_greed=19)
+    assert not v.approved
+    assert v.rule == "sentiment_veto"
+    # boundary: 20 is not extreme fear
+    assert RiskEngine().review("enter", "BNB", p, fear_greed=20).approved
+
+
+def test_sentiment_veto_fails_closed_when_unavailable():
+    p = make_portfolio(150.0)
+    v = RiskEngine().review("enter", "BNB", p, fear_greed=None)
+    assert not v.approved
+    assert v.rule == "sentiment_veto"
+    # exits stay allowed even with no reading
+    p.positions["BNB"] = Position("BNB", 0.05, 600.0, time.time())
+    assert RiskEngine().review("exit", "BNB", p, fear_greed=None).approved
 
 
 def test_stop_loss_fires_at_3_pct():
@@ -41,7 +61,7 @@ def test_daily_loss_cap_flattens_and_halts():
     v = engine.portfolio_gates(p)
     assert v is not None and v.rule == "daily_loss_cap"
     # and entries are now blocked
-    assert engine.review("enter", "BNB", p).rule == "daily_halt"
+    assert engine.review("enter", "BNB", p, fear_greed=50).rule == "daily_halt"
 
 
 def test_kill_switch_at_10_pct_drawdown():
@@ -86,6 +106,6 @@ def test_max_concurrent_positions_cap():
     p = Portfolio(cash=60.0)
     for i, sym in enumerate(("BNB", "BTC", "ETH")):
         p.positions[sym] = Position(sym, 1.0, 30.0, 1.0)
-    v = eng.review("enter", "SOL", p)
+    v = eng.review("enter", "SOL", p, fear_greed=50)
     assert not v.approved
     assert v.rule == "max_concurrent"

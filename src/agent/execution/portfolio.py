@@ -28,6 +28,12 @@ class Portfolio:
     day_start_ts: float = 0.0
     last_prices: dict[str, float] = field(default_factory=dict)
     mode: str = ""  # "paper" | "live" — guards against mixing paper history into live baselines
+    # judged return baseline: starting capital (paper) or the live_rebase wallet
+    # amount. 0.0 = unknown (pre-upgrade state file); readers must fall back.
+    baseline_equity: float = 0.0
+    # host that entered live mode — two machines trading one wallet would
+    # double-trade, so a live start on a different host refuses (runner)
+    live_host: str = ""
 
     def __post_init__(self) -> None:
         if self.peak_equity == 0.0:
@@ -67,7 +73,7 @@ class Portfolio:
     @classmethod
     def load(cls, path: Path, starting_capital: float) -> "Portfolio":
         if not path.exists():
-            return cls(cash=starting_capital)
+            return cls(cash=starting_capital, baseline_equity=starting_capital)
         data = json.loads(path.read_text())
         data["positions"] = {
             sym: Position(**pos) for sym, pos in data["positions"].items()

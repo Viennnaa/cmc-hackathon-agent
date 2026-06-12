@@ -76,6 +76,24 @@ SELF_REVIEW_DEFENSIVE_SIZE_FACTOR = 0.5  # ... -> halve entry sizes (never raise
 STALE_QUOTE_MAX_AGE_SECONDS = 300     # CMC quote older than this is not a fresh price
 STALE_QUOTE_FLATTEN_SECONDS = 600     # held symbol unpriced this long -> protective exit
 
+# --- Quote-plausibility protection (fail closed) --------------------------------
+# One glitched CMC sample must not poison the rules: an up-spike permanently
+# inflates peak_equity (arming the kill switch against honest quotes), a
+# down-spike fires every stop-loss at once. A quote jumping more than the
+# bound vs the last accepted sample is quarantined (routes into the
+# quote-gap protection) until a second consecutive poll agrees.
+QUOTE_MAX_JUMP_PCT = 0.15        # poll-to-poll move beyond this needs confirmation
+QUOTE_CONFIRM_TOLERANCE_PCT = 0.05  # second poll within this of the suspect = real move
+
+# --- Live gas safety (fail closed) ----------------------------------------------
+# Exits must always be fundable: running out of BNB mid-window would strand a
+# position with a stop-loss that cannot execute.
+MIN_GAS_BNB_START = 0.005        # refuse to start live below this BNB balance
+LOW_GAS_BNB_WARN = 0.006         # warn ABOVE the start threshold: top up before a
+                                 # restart would be refused, not after (no dead zone)
+GAS_CHECK_INTERVAL_SECONDS = 3600
+LIVE_QTY_MISMATCH_TOLERANCE = 0.02  # wallet vs portfolio.json qty drift allowed on restart
+
 # --- Paper execution model ----------------------------------------------------
 PAPER_FEE_PCT = 0.0025      # PancakeSwap v2 LP fee
 PAPER_SLIPPAGE_PCT = 0.001  # assumed slippage on top-liquidity pairs
