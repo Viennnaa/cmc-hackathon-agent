@@ -251,11 +251,28 @@ function render(s) {
   m.textContent = s.mode.toUpperCase();
   m.className = 'chip ' + (s.mode === 'live' ? 'live' : 'paper');
 
+  // per-position mark: cost basis -> current value + unrealized PnL. Everything
+  // here is already in portfolio.json (qty, entry_price, last_prices), so this
+  // is a pure view — no new source of truth.
+  const marks = p.last_prices || {};
+  const posDetail = positions.map(sym => {
+    const ps = (p.positions || {})[sym] || {};
+    const mark = marks[sym] ?? ps.entry_price;
+    const cost = (ps.qty || 0) * (ps.entry_price || 0);
+    const cur = (ps.qty || 0) * mark;
+    const upl = cur - cost;
+    const pct = cost ? upl / cost * 100 : 0;
+    const cls = upl >= 0 ? 'gain' : 'loss';
+    const sg = upl >= 0 ? '+' : '';
+    return `${esc(sym)} <span class="num">${cost.toFixed(2)}&rarr;${cur.toFixed(2)}</span> `
+      + `<span class="${cls} num">${sg}${upl.toFixed(2)} (${sg}${pct.toFixed(2)}%)</span>`;
+  }).join('<br>');
+
   document.getElementById('cards').innerHTML = [
     {l:'Equity', v:`${eq.toFixed(2)}<span class="unit">USDT</span>`, s:`peak ${(p.peak_equity ?? eq).toFixed(2)}`},
     {l:'Return', v:`${ret >= 0 ? '+' : ''}${ret.toFixed(2)}<span class="unit">%</span>`, c:ret >= 0 ? 'pos' : 'neg', s:`since baseline &middot; ${BASELINE} USDT`},
     {l:'Cash', v:`${(p.cash ?? 0).toFixed(2)}<span class="unit">USDT</span>`, s:positions.length ? `${(eq - (p.cash ?? 0)).toFixed(2)} deployed` : 'fully in cash'},
-    {l:'Open positions', v:String(positions.length), s:positions.length ? esc(positions.join(' · ')) : 'flat &mdash; waiting for signal'},
+    {l:'Open positions', v:String(positions.length), s:positions.length ? posDetail : 'flat &mdash; waiting for signal'},
     {l:'Max drawdown', v:`${dd.toFixed(2)}<span class="unit">%</span>`, c:dd > 5 ? 'neg' : '', s:`full-res over ${s.drawdown_samples ?? vals.length} samples`},
     {l:'Fear &amp; Greed', v:fg ?? '&mdash;', s:`<span style="color:${zcol}">${zone}</span>`,
      extra:fg != null ? `<div class="gauge" aria-hidden="true"><i style="left:${Math.min(Math.max(fg, 0), 100)}%"></i></div>` : ''},
