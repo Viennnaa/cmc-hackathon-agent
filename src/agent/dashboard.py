@@ -175,7 +175,14 @@ PAGE = """<!doctype html>
   .rail{display:flex;flex-direction:column;gap:16px;min-width:0}
   .duo{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
   .deck>*,.duo>*{min-width:0}
-  .gate[title]{cursor:help}
+  .gate[data-gate]{cursor:pointer}
+  .gate.active{border-color:var(--gold);color:var(--fg)}
+  .gate.active b{color:var(--gold)}
+  .gate-detail{padding:2px 18px 16px;font-size:12.5px;line-height:1.55;color:var(--fg2)}
+  .gate-detail[hidden]{display:none}
+  .gate-detail b{color:var(--fg);font-weight:600}
+  .gate-detail .gd-latest{display:block;margin-top:6px;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--fg3);word-break:break-word}
+  .narration-scroll .note p{max-width:80ch}
   @media (max-width:980px){.deck,.duo{grid-template-columns:1fr}}
   .scroll-cap{max-height:360px;overflow:auto}
   .scroll-cap thead th{position:sticky;top:0;background:var(--surface);z-index:2}
@@ -215,14 +222,16 @@ PAGE = """<!doctype html>
       <div class="pad"><div class="pos-list" id="positions"></div></div>
     </div>
     <div class="card table-card">
-      <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">risk gates &amp; nightly reviews</span></div>
+      <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">risk gates &amp; nightly reviews &middot; click to expand</span></div>
       <div class="pad gates" id="rules"></div>
-    </div>
-    <div class="card table-card" id="narration-card" style="display:none">
-      <div class="card-h"><h2>Agent commentary</h2><span class="meta">observe-only &middot; never trades</span></div>
-      <div class="pad narration-scroll" id="narration"></div>
+      <div class="gate-detail" id="gate-detail" hidden></div>
     </div>
   </div>
+</div>
+
+<div class="card table-card" id="narration-card" style="display:none">
+  <div class="card-h"><h2>Agent commentary</h2><span class="meta">observe-only &middot; never trades</span></div>
+  <div class="pad narration-scroll" id="narration"></div>
 </div>
 
 <div class="duo">
@@ -261,7 +270,7 @@ const GATE_HELP = {
   token_risk_veto: 'On-chain token-risk check blocked the entry.',
 };
 const SHIELD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
-let lastFetch = 0, lastState = null, pts = [];
+let lastFetch = 0, lastState = null, pts = [], selectedGate = null;
 
 const esc = s => String(s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -338,9 +347,13 @@ function render(s) {
       const detail = (s.rule_details || {})[r] || '';
       let tip = GATE_HELP[r] || '';
       if (detail) tip += (tip ? '\\n\\nLatest: ' : '') + detail;
-      return `<span class="gate ${VETO_RULES.includes(r) ? 'veto' : ''}"${tip ? ` title="${esc(tip)}"` : ''}>${SHIELD}${esc(r).replace(/_/g, ' ')} <b class="num">&times;${n}</b></span>`;
+      const active = r === selectedGate ? ' active' : '';
+      return `<span class="gate ${VETO_RULES.includes(r) ? 'veto' : ''}${active}" data-gate="${esc(r)}" role="button" tabindex="0"${tip ? ` title="${esc(tip)}"` : ''}>${SHIELD}${esc(r).replace(/_/g, ' ')} <b class="num">&times;${n}</b></span>`;
     })
     .join('') || `<span class="gate">${SHIELD}no gates fired yet &mdash; entries passing clean</span>`;
+  // keep the expanded detail in sync across the 5s re-render (or drop it if the gate aged out)
+  if (selectedGate && s.rule_counts[selectedGate]) renderGateDetail(selectedGate);
+  else { selectedGate = null; const gd = document.getElementById('gate-detail'); gd.hidden = true; gd.innerHTML = ''; }
 
   const notes = s.narration || [];
   document.getElementById('narration-card').style.display = notes.length ? '' : 'none';
@@ -473,6 +486,36 @@ async function tick() {
     render(s);
   } catch (e) { /* keep last view; staleness indicator takes over */ }
 }
+// risk-gate chips are clickable: expand a detail line (gloss + latest journal
+// detail). #rules re-renders every 5s, so the listener lives on the stable
+// parent and selectedGate persists the open chip across refreshes.
+function renderGateDetail(gate) {
+  const gd = document.getElementById('gate-detail');
+  const help = GATE_HELP[gate] || 'no description available';
+  const detail = ((lastState && lastState.rule_details) || {})[gate] || '';
+  gd.innerHTML = `<b>${esc(gate.replace(/_/g, ' '))}</b> &mdash; ${esc(help)}`
+    + (detail ? `<span class="gd-latest">Latest: ${esc(detail)}</span>` : '');
+  gd.hidden = false;
+}
+const rulesEl = document.getElementById('rules');
+rulesEl.addEventListener('click', ev => {
+  const chip = ev.target.closest('[data-gate]');
+  if (!chip) return;
+  const g = chip.getAttribute('data-gate');
+  selectedGate = selectedGate === g ? null : g;
+  const gd = document.getElementById('gate-detail');
+  if (selectedGate) renderGateDetail(selectedGate);
+  else { gd.hidden = true; gd.innerHTML = ''; }
+  document.querySelectorAll('#rules .gate').forEach(el =>
+    el.classList.toggle('active', el.getAttribute('data-gate') === selectedGate));
+});
+rulesEl.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' || ev.key === ' ') {
+    const chip = ev.target.closest('[data-gate]');
+    if (chip) { ev.preventDefault(); chip.click(); }
+  }
+});
+
 tick(); setInterval(tick, 5000);
 </script></body></html>"""
 
