@@ -228,24 +228,23 @@ PAGE = """<!doctype html>
   </div>
 </div>
 
+<div class="card table-card">
+  <div class="card-h"><h2>Latest decisions</h2><span class="meta">journal &middot; newest first &middot; UTC</span></div>
+  <div class="table-wrap scroll-cap"><table id="decisions">
+    <thead><tr><th>time</th><th>asset</th><th class="r">price</th><th class="r">rsi</th><th>action</th><th>risk rule</th><th>reason</th></tr></thead>
+    <tbody></tbody></table></div>
+</div>
+
+<div class="card table-card">
+  <div class="card-h"><h2>Fills</h2><span class="meta">ledger &middot; newest first &middot; UTC</span></div>
+  <div class="table-wrap scroll-cap"><table id="fills">
+    <thead><tr><th>time</th><th>side</th><th>asset</th><th class="r">qty</th><th class="r">price</th><th class="r">pnl (usdt)</th></tr></thead>
+    <tbody></tbody></table></div>
+</div>
+
 <div class="card table-card" id="narration-card" style="display:none">
   <div class="card-h"><h2>Agent commentary</h2><span class="meta">observe-only &middot; never trades</span></div>
   <div class="pad narration-scroll" id="narration"></div>
-</div>
-
-<div class="duo">
-  <div class="card table-card">
-    <div class="card-h"><h2>Latest decisions</h2><span class="meta">journal &middot; newest first &middot; UTC</span></div>
-    <div class="table-wrap scroll-cap"><table id="decisions">
-      <thead><tr><th>time</th><th>asset</th><th class="r">price</th><th class="r">rsi</th><th>action</th><th>risk rule</th><th>reason</th></tr></thead>
-      <tbody></tbody></table></div>
-  </div>
-  <div class="card table-card">
-    <div class="card-h"><h2>Fills</h2><span class="meta">ledger &middot; newest first &middot; UTC</span></div>
-    <div class="table-wrap scroll-cap"><table id="fills">
-      <thead><tr><th>time</th><th>side</th><th>asset</th><th class="r">qty</th><th class="r">price</th><th class="r">pnl (usdt)</th></tr></thead>
-      <tbody></tbody></table></div>
-  </div>
 </div>
 
 <footer>Deterministic strategy core &middot; hard risk gates &middot; full decision log &mdash; this dashboard reads journal.jsonl, ledger.jsonl and portfolio.json directly; it is a view, never a second source of truth.</footer>
