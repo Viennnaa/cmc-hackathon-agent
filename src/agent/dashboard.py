@@ -182,7 +182,6 @@ PAGE = """<!doctype html>
   .gate-detail[hidden]{display:none}
   .gate-detail b{color:var(--fg);font-weight:600}
   .gate-detail .gd-latest{display:block;margin-top:6px;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--fg3);word-break:break-word}
-  .narration-scroll .note p{max-width:80ch}
   @media (max-width:980px){.deck,.duo{grid-template-columns:1fr}}
   .scroll-cap{max-height:360px;overflow:auto}
   .scroll-cap thead th{position:sticky;top:0;background:var(--surface);z-index:2}
