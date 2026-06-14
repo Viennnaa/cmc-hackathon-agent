@@ -35,6 +35,7 @@ def state() -> dict:
     ledger = _read_jsonl(LEDGER_PATH, limit=100)
 
     rule_counts: dict[str, int] = {}
+    rule_details: dict[str, str] = {}  # latest detail string per gate (for hover info)
     equity_series = []
     fear_greed = None
     for rec in journal:
@@ -42,6 +43,9 @@ def state() -> dict:
             rule = rec["risk_verdict"].get("rule")
             if rule and rule not in ("no_action", "position_sizing", "strategy_exit"):
                 rule_counts[rule] = rule_counts.get(rule, 0) + 1
+                detail = rec["risk_verdict"].get("detail")
+                if detail:
+                    rule_details[rule] = detail
             if rec.get("equity") is not None:
                 equity_series.append({"ts": rec["ts"], "equity": rec["equity"]})
             fg = (rec.get("inputs") or {}).get("fear_greed")
@@ -49,6 +53,8 @@ def state() -> dict:
                 fear_greed = fg
         elif "event" in rec:
             rule_counts[rec["event"]] = rule_counts.get(rec["event"], 0) + 1
+            if rec.get("detail"):
+                rule_details[rec["event"]] = rec["detail"]
 
     # full-resolution drawdown BEFORE downsampling: the client only sees a
     # downsampled curve and would miss intra-gap troughs on the headline KPI
@@ -79,10 +85,11 @@ def state() -> dict:
         "drawdown_samples": drawdown_samples,
         "fear_greed": fear_greed,
         "rule_counts": rule_counts,
+        "rule_details": rule_details,
         "equity_series": equity_series,
         "decisions": [r for r in journal if "signal" in r][-40:][::-1],
         "fills": ledger[::-1],
-        "narration": _read_jsonl(NARRATION_PATH, limit=8)[::-1],
+        "narration": _read_jsonl(NARRATION_PATH, limit=40)[::-1],
     }
 
 
@@ -164,6 +171,22 @@ PAGE = """<!doctype html>
   .note .ts{color:var(--fg3);font-size:11px;white-space:nowrap;padding-top:3px}
   .note p{margin:0;font-size:13px;line-height:1.55;color:var(--fg)}
   footer{font-size:11.5px;color:var(--fg3);text-align:center}
+  .deck{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:16px;align-items:start}
+  .rail{display:flex;flex-direction:column;gap:16px;min-width:0}
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .deck>*,.duo>*{min-width:0}
+  .gate[title]{cursor:help}
+  @media (max-width:980px){.deck,.duo{grid-template-columns:1fr}}
+  .scroll-cap{max-height:360px;overflow:auto}
+  .scroll-cap thead th{position:sticky;top:0;background:var(--surface);z-index:2}
+  .narration-scroll{max-height:300px;overflow-y:auto}
+  .pos-list{display:flex;flex-direction:column;gap:9px}
+  .pos-item{background:var(--muted);border:1px solid var(--border);border-radius:9px;padding:9px 11px}
+  .pos-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .pos-sym{font-weight:600;font-size:13px;letter-spacing:.01em}
+  .pos-pnl{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+  .pos-sub{display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-size:11px;color:var(--fg2);font-variant-numeric:tabular-nums}
+  .pos-empty{color:var(--fg2);font-size:12.5px;padding:6px 2px}
   @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <div class="wrap">
@@ -177,37 +200,44 @@ PAGE = """<!doctype html>
 
 <div class="kpis" id="cards" aria-live="polite"></div>
 
-<div class="card table-card">
-  <div class="card-h"><h2>Equity curve <span class="unit">USDT</span></h2><span class="meta num" id="chartmeta"></span></div>
-  <div class="pad" id="chartwrap">
-    <canvas id="chart" role="img" aria-label="Equity over time"></canvas>
-    <div id="xline" aria-hidden="true"></div><div id="tip" aria-hidden="true"></div>
-    <div class="empty" id="chartempty" style="display:none">Collecting equity data &mdash; first points arrive within a couple of polls.</div>
+<div class="deck">
+  <div class="card table-card">
+    <div class="card-h"><h2>Equity curve <span class="unit">USDT</span></h2><span class="meta num" id="chartmeta"></span></div>
+    <div class="pad" id="chartwrap">
+      <canvas id="chart" role="img" aria-label="Equity over time"></canvas>
+      <div id="xline" aria-hidden="true"></div><div id="tip" aria-hidden="true"></div>
+      <div class="empty" id="chartempty" style="display:none">Collecting equity data &mdash; first points arrive within a couple of polls.</div>
+    </div>
+  </div>
+  <div class="rail">
+    <div class="card table-card">
+      <div class="card-h"><h2>Open positions</h2><span class="meta num" id="posmeta"></span></div>
+      <div class="pad"><div class="pos-list" id="positions"></div></div>
+    </div>
+    <div class="card table-card">
+      <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">risk gates &amp; nightly reviews</span></div>
+      <div class="pad gates" id="rules"></div>
+    </div>
+    <div class="card table-card" id="narration-card" style="display:none">
+      <div class="card-h"><h2>Agent commentary</h2><span class="meta">observe-only &middot; never trades</span></div>
+      <div class="pad narration-scroll" id="narration"></div>
+    </div>
   </div>
 </div>
 
-<div class="card table-card">
-  <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">counts over recent journal</span></div>
-  <div class="pad gates" id="rules"></div>
-</div>
-
-<div class="card table-card" id="narration-card" style="display:none">
-  <div class="card-h"><h2>Agent commentary</h2><span class="meta">AI narration &middot; observe-only, never trades</span></div>
-  <div class="pad" id="narration"></div>
-</div>
-
-<div class="card table-card">
-  <div class="card-h"><h2>Latest decisions</h2><span class="meta">journal replay &middot; newest first &middot; times UTC</span></div>
-  <div class="table-wrap"><table id="decisions">
-    <thead><tr><th>time</th><th>asset</th><th class="r">price</th><th class="r">rsi</th><th>action</th><th>risk rule</th><th>reason</th></tr></thead>
-    <tbody></tbody></table></div>
-</div>
-
-<div class="card table-card">
-  <div class="card-h"><h2>Fills</h2><span class="meta">ledger &middot; newest first &middot; times UTC</span></div>
-  <div class="table-wrap"><table id="fills">
-    <thead><tr><th>time</th><th>side</th><th>asset</th><th class="r">qty</th><th class="r">price</th><th class="r">pnl (usdt)</th></tr></thead>
-    <tbody></tbody></table></div>
+<div class="duo">
+  <div class="card table-card">
+    <div class="card-h"><h2>Latest decisions</h2><span class="meta">journal &middot; newest first &middot; UTC</span></div>
+    <div class="table-wrap scroll-cap"><table id="decisions">
+      <thead><tr><th>time</th><th>asset</th><th class="r">price</th><th class="r">rsi</th><th>action</th><th>risk rule</th><th>reason</th></tr></thead>
+      <tbody></tbody></table></div>
+  </div>
+  <div class="card table-card">
+    <div class="card-h"><h2>Fills</h2><span class="meta">ledger &middot; newest first &middot; UTC</span></div>
+    <div class="table-wrap scroll-cap"><table id="fills">
+      <thead><tr><th>time</th><th>side</th><th>asset</th><th class="r">qty</th><th class="r">price</th><th class="r">pnl (usdt)</th></tr></thead>
+      <tbody></tbody></table></div>
+  </div>
 </div>
 
 <footer>Deterministic strategy core &middot; hard risk gates &middot; full decision log &mdash; this dashboard reads journal.jsonl, ledger.jsonl and portfolio.json directly; it is a view, never a second source of truth.</footer>
@@ -215,6 +245,21 @@ PAGE = """<!doctype html>
 <script>
 let BASELINE = 150;  // judged baseline; replaced by /api/state's value
 const VETO_RULES = ['token_risk_veto','stop_loss','kill_switch','daily_loss_cap','reentry_cooldown'];
+// plain-English gloss per gate/event — surfaced as a hover tooltip so the chips
+// explain themselves (they are counters, not buttons; clicking does nothing)
+const GATE_HELP = {
+  self_review: 'Nightly strategy self-review: replays every strategy over the trailing window and adopts the best performer. Narrow-only — it can shrink entry size but never loosen a risk limit.',
+  stop_loss: 'Per-position stop: exits when price falls 3% below entry.',
+  daily_loss_cap: 'Flatten everything and halt for 24h after a 5% daily loss.',
+  kill_switch: 'Flatten and permanently stop at 10% drawdown from peak equity.',
+  reentry_cooldown: 'Blocks re-entering a symbol for 8 bars after an exit (anti-churn).',
+  sentiment_veto: 'No new entries while Fear & Greed is in extreme fear (below 20).',
+  single_position: 'Already holding this symbol — no duplicate entry.',
+  max_concurrent: 'Position-count cap reached (max 3 concurrent).',
+  insufficient_cash: 'Not enough cash to fund the sized entry.',
+  daily_halt: 'Entries paused during the post-loss 24h halt window.',
+  token_risk_veto: 'On-chain token-risk check blocked the entry.',
+};
 const SHIELD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
 let lastFetch = 0, lastState = null, pts = [];
 
@@ -251,36 +296,50 @@ function render(s) {
   m.textContent = s.mode.toUpperCase();
   m.className = 'chip ' + (s.mode === 'live' ? 'live' : 'paper');
 
-  // per-position mark: cost basis -> current value + unrealized PnL. Everything
-  // here is already in portfolio.json (qty, entry_price, last_prices), so this
-  // is a pure view — no new source of truth.
+  // Open positions detail for the sidebar panel. Everything here is already in
+  // portfolio.json (qty, entry_price, last_prices) — a pure view, no new source
+  // of truth. The KPI card stays a bare count; the breakdown lives in the panel.
   const marks = p.last_prices || {};
-  const posDetail = positions.map(sym => {
+  let totalUpl = 0;
+  const posList = positions.map(sym => {
     const ps = (p.positions || {})[sym] || {};
     const mark = marks[sym] ?? ps.entry_price;
     const cost = (ps.qty || 0) * (ps.entry_price || 0);
     const cur = (ps.qty || 0) * mark;
-    const upl = cur - cost;
+    const upl = cur - cost; totalUpl += upl;
     const pct = cost ? upl / cost * 100 : 0;
-    const cls = upl >= 0 ? 'gain' : 'loss';
-    const sg = upl >= 0 ? '+' : '';
-    return `${esc(sym)} <span class="num">${cost.toFixed(2)}&rarr;${cur.toFixed(2)}</span> `
-      + `<span class="${cls} num">${sg}${upl.toFixed(2)} (${sg}${pct.toFixed(2)}%)</span>`;
-  }).join('<br>');
+    const cls = upl >= 0 ? 'gain' : 'loss', sg = upl >= 0 ? '+' : '';
+    return `<div class="pos-item">
+      <div class="pos-top"><span class="pos-sym">${esc(sym)}</span>
+        <span class="pos-pnl ${cls}">${sg}${upl.toFixed(2)} (${sg}${pct.toFixed(2)}%)</span></div>
+      <div class="pos-sub"><span>${(ps.qty || 0).toFixed(6)} @ ${(ps.entry_price || 0).toFixed(2)}</span>
+        <span>${cost.toFixed(2)} &rarr; ${cur.toFixed(2)}</span></div></div>`;
+  }).join('');
 
   document.getElementById('cards').innerHTML = [
     {l:'Equity', v:`${eq.toFixed(2)}<span class="unit">USDT</span>`, s:`peak ${(p.peak_equity ?? eq).toFixed(2)}`},
     {l:'Return', v:`${ret >= 0 ? '+' : ''}${ret.toFixed(2)}<span class="unit">%</span>`, c:ret >= 0 ? 'pos' : 'neg', s:`since baseline &middot; ${BASELINE} USDT`},
     {l:'Cash', v:`${(p.cash ?? 0).toFixed(2)}<span class="unit">USDT</span>`, s:positions.length ? `${(eq - (p.cash ?? 0)).toFixed(2)} deployed` : 'fully in cash'},
-    {l:'Open positions', v:String(positions.length), s:positions.length ? posDetail : 'flat &mdash; waiting for signal'},
+    {l:'Open positions', v:String(positions.length), s:positions.length ? esc(positions.join(' · ')) : 'flat &mdash; waiting for signal'},
     {l:'Max drawdown', v:`${dd.toFixed(2)}<span class="unit">%</span>`, c:dd > 5 ? 'neg' : '', s:`full-res over ${s.drawdown_samples ?? vals.length} samples`},
     {l:'Fear &amp; Greed', v:fg ?? '&mdash;', s:`<span style="color:${zcol}">${zone}</span>`,
      extra:fg != null ? `<div class="gauge" aria-hidden="true"><i style="left:${Math.min(Math.max(fg, 0), 100)}%"></i></div>` : ''},
   ].map(k => `<div class="card kpi ${k.c || ''}"><div class="l">${k.l}</div><div class="v num">${k.v}</div><div class="s">${k.s}</div>${k.extra || ''}</div>`).join('');
 
+  document.getElementById('positions').innerHTML = positions.length ? posList
+    : '<div class="pos-empty">Flat &mdash; waiting for a signal.</div>';
+  const tcls = totalUpl >= 0 ? 'gain' : 'loss', tsg = totalUpl >= 0 ? '+' : '';
+  document.getElementById('posmeta').innerHTML = positions.length
+    ? `<span class="${tcls}">${tsg}${totalUpl.toFixed(2)} unrealized</span>` : '';
+
   document.getElementById('rules').innerHTML = Object.entries(s.rule_counts)
     .sort((a, b) => b[1] - a[1])
-    .map(([r, n]) => `<span class="gate ${VETO_RULES.includes(r) ? 'veto' : ''}">${SHIELD}${esc(r).replace(/_/g, ' ')} <b class="num">&times;${n}</b></span>`)
+    .map(([r, n]) => {
+      const detail = (s.rule_details || {})[r] || '';
+      let tip = GATE_HELP[r] || '';
+      if (detail) tip += (tip ? '\\n\\nLatest: ' : '') + detail;
+      return `<span class="gate ${VETO_RULES.includes(r) ? 'veto' : ''}"${tip ? ` title="${esc(tip)}"` : ''}>${SHIELD}${esc(r).replace(/_/g, ' ')} <b class="num">&times;${n}</b></span>`;
+    })
     .join('') || `<span class="gate">${SHIELD}no gates fired yet &mdash; entries passing clean</span>`;
 
   const notes = s.narration || [];
