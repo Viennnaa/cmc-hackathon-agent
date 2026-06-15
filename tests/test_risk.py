@@ -10,11 +10,11 @@ def make_portfolio(cash=150.0):
     return Portfolio(cash=cash)
 
 
-def test_entry_sized_at_20_pct():
+def test_entry_sized_at_max_position_pct():
     p = make_portfolio(150.0)
-    v = RiskEngine().review("enter", "BNB", p, fear_greed=50)
+    v = RiskEngine().review("enter", "ETH", p, fear_greed=50)
     assert v.approved
-    assert abs(v.size_usdt - 30.0) < 1e-9
+    assert abs(v.size_usdt - 150.0 * config.MAX_POSITION_PCT) < 1e-9
     assert v.rule == "position_sizing"
 
 
@@ -26,32 +26,23 @@ def test_no_double_position():
     assert v.rule == "single_position"
 
 
-def test_sentiment_veto_engine_enforced():
-    """Judged rule: F&G < 20 -> no new entries, for EVERY strategy (engine-level)."""
+def test_no_sentiment_veto_trades_through_fear():
+    """Veto removed for the PnL competition: extreme fear (or a missing reading)
+    no longer blocks entries — the agent must keep trading."""
     p = make_portfolio(150.0)
-    v = RiskEngine().review("enter", "BNB", p, fear_greed=19)
-    assert not v.approved
-    assert v.rule == "sentiment_veto"
-    # boundary: 20 is not extreme fear
-    assert RiskEngine().review("enter", "BNB", p, fear_greed=20).approved
+    assert RiskEngine().review("enter", "ETH", p, fear_greed=5).approved
+    assert RiskEngine().review("enter", "ETH", p, fear_greed=None).approved
+    # exits stay allowed regardless
+    p.positions["ETH"] = Position("ETH", 0.05, 600.0, time.time())
+    assert RiskEngine().review("exit", "ETH", p, fear_greed=None).approved
 
 
-def test_sentiment_veto_fails_closed_when_unavailable():
-    p = make_portfolio(150.0)
-    v = RiskEngine().review("enter", "BNB", p, fear_greed=None)
-    assert not v.approved
-    assert v.rule == "sentiment_veto"
-    # exits stay allowed even with no reading
-    p.positions["BNB"] = Position("BNB", 0.05, 600.0, time.time())
-    assert RiskEngine().review("exit", "BNB", p, fear_greed=None).approved
-
-
-def test_stop_loss_fires_at_3_pct():
+def test_stop_loss_fires_at_stop_pct():
     p = make_portfolio()
-    p.positions["BNB"] = Position("BNB", 0.05, 600.0, time.time())
+    p.positions["ETH"] = Position("ETH", 0.05, 600.0, time.time())
     engine = RiskEngine()
-    assert engine.stop_loss_check(p, "BNB", 600.0 * 0.97) is not None
-    assert engine.stop_loss_check(p, "BNB", 600.0 * 0.975) is None
+    assert engine.stop_loss_check(p, "ETH", 600.0 * (1 - config.STOP_LOSS_PCT - 0.005)) is not None
+    assert engine.stop_loss_check(p, "ETH", 600.0 * (1 - config.STOP_LOSS_PCT + 0.005)) is None
 
 
 def test_daily_loss_cap_flattens_and_halts():
@@ -77,7 +68,8 @@ def test_kill_switch_at_10_pct_drawdown():
 def test_kill_switch_outranks_daily_cap():
     p = make_portfolio(150.0)
     engine = RiskEngine()
-    p.cash = 150.0 * 0.85  # -15%: beyond both thresholds
+    # a drop beyond the kill threshold also exceeds the daily cap; kill wins
+    p.cash = 150.0 * (1 - config.KILL_SWITCH_DRAWDOWN_PCT - 0.05)
     v = engine.portfolio_gates(p)
     assert v.rule == "kill_switch"
 
@@ -103,9 +95,10 @@ def test_paper_round_trip_pnl():
 def test_max_concurrent_positions_cap():
     from agent.execution.portfolio import Position
     eng = RiskEngine()
-    p = Portfolio(cash=60.0)
-    for i, sym in enumerate(("BNB", "BTC", "ETH")):
+    p = Portfolio(cash=200.0)
+    held = ["ETH", "XRP", "DOGE", "ADA", "LINK", "AVAX"][:config.MAX_CONCURRENT_POSITIONS]
+    for sym in held:
         p.positions[sym] = Position(sym, 1.0, 30.0, 1.0)
-    v = eng.review("enter", "SOL", p, fear_greed=50)
+    v = eng.review("enter", "UNI", p, fear_greed=50)
     assert not v.approved
     assert v.rule == "max_concurrent"

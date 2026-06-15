@@ -31,12 +31,22 @@ TWAK_CMD = ["twak"]  # assumes global install: npm install -g @trustwallet/cli
 # c714, but BEP-20 tokens use the legacy smartchain coin id c20000714_t<address>
 # (c714_t... returns TOKEN_NOT_FOUND). Addresses must keep EIP-55 checksum case.
 ASSET_IDS = {
-    "BNB": "c714",
-    "BTC": "c20000714_t0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",   # BTCB
-    "ETH": "c20000714_t0x2170Ed0880ac9A755fd29B2688956BD959F933F8",   # BNB pegged ETH
-    "SOL": "c20000714_t0x570A5D26f7765Ecb712C0924E4De545B89fD43dF",   # BNB pegged SOL
-    "XRP": "c20000714_t0x1D2F0da169ceB9fC7B3144628dB156f3F6c60dBE",   # BNB pegged XRP
+    "BNB": "c714",  # native gas asset, never traded (kept for gas/reference)
+    "ETH": "c20000714_t0x2170Ed0880ac9A755fd29B2688956BD959F933F8",   # Binance-Peg ETH
+    "XRP": "c20000714_t0x1D2F0da169ceB9fC7B3144628dB156f3F6c60dBE",   # Binance-Peg XRP
     "CAKE": "c20000714_t0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82",  # PancakeSwap (native BSC)
+    "DOGE": "c20000714_t0xbA2aE424d960c26247Dd6c32edC70B295c744C43",   # Binance-Peg DOGE
+    "ADA": "c20000714_t0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47",    # Binance-Peg ADA
+    "LINK": "c20000714_t0xF8A0BF9cF54Bb92F17374d9e9A321E6a111a51bD",   # Binance-Peg LINK
+    "AVAX": "c20000714_t0x1CE0c2827e2eF14D5C4f29a091d735A204794041",   # Binance-Peg AVAX
+    "LTC": "c20000714_t0x4338665CBB7B2485A8855A139b75D5e34AB0DB94",    # Binance-Peg LTC
+    "AAVE": "c20000714_t0xfb6115445Bff7b52FeB98650C87f44907E58f802",   # Binance-Peg AAVE
+    "DOT": "c20000714_t0x7083609fCE4d1d8Dc0C979AAb8c869Ea2C873402",    # Binance-Peg DOT
+    "UNI": "c20000714_t0xBf5140A22578168FD562DCcF235E5D43A02ce9B1",    # Binance-Peg UNI
+    "SHIB": "c20000714_t0x2859e4544C4bB03966803b044A93563Bd2D0DD4D",   # Binance-Peg SHIB
+    "FET": "c20000714_t0x031b41e504677879370e9DBcF937283A8691Fa7f",    # Binance-Peg FET
+    "INJ": "c20000714_t0xa2B726B1145A4773F68593CF171187d8EBe4d495",    # Binance-Peg INJ
+    "TWT": "c20000714_t0x4B0F1812e5Df2A09796481Ff14017e6005508003",    # Trust Wallet Token (native BSC)
 }
 
 # CMC symbol -> identifier passed to `twak swap`, verified live 2026-06-11:
@@ -45,12 +55,10 @@ ASSET_IDS = {
 # "CAKE" was unknown). Quotes for every entry below were verified by id.
 SWAP_IDS = {
     "USDT": "USDT",
-    "BNB": "BNB",
-    "BTC": ASSET_IDS["BTC"],
-    "ETH": ASSET_IDS["ETH"],
-    "SOL": ASSET_IDS["SOL"],
-    "XRP": ASSET_IDS["XRP"],
-    "CAKE": ASSET_IDS["CAKE"],
+    **{sym: ASSET_IDS[sym] for sym in (
+        "ETH", "XRP", "CAKE", "DOGE", "ADA", "LINK", "AVAX", "LTC",
+        "AAVE", "DOT", "UNI", "SHIB", "FET", "INJ", "TWT",
+    )},
 }
 
 
@@ -108,16 +116,16 @@ def _amount(value) -> float:
     return float(str(value).split()[0])
 
 
-# wallet-side symbols per universe symbol: pegged tokens may report under
-# their BEP-20 name (BTC trades and shows up as BTCB)
+# wallet-side symbols per universe symbol: Binance-Peg tokens report under
+# their plain symbol on Trust Wallet (verify on a live held-position reconcile;
+# add a "-peg" alias here if any reports differently). BNB is the gas asset.
 WALLET_SYMBOLS = {
     "USDT": ("USDT",),
     "BNB": ("BNB",),
-    "BTC": ("BTC", "BTCB"),
-    "ETH": ("ETH",),
-    "SOL": ("SOL",),
-    "XRP": ("XRP",),
-    "CAKE": ("CAKE",),
+    **{sym: (sym,) for sym in (
+        "ETH", "XRP", "CAKE", "DOGE", "ADA", "LINK", "AVAX", "LTC",
+        "AAVE", "DOT", "UNI", "SHIB", "FET", "INJ", "TWT",
+    )},
 }
 
 

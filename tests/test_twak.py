@@ -40,9 +40,9 @@ def test_pre_entry_vetoes_high_risk():
 
 
 def test_pre_entry_passes_on_medium_risk():
-    # BTCB is Blockaid-audited but rated medium (mint function); tradeable
+    # medium-risk tokens (e.g. a mint function) stay tradeable; only high is vetoed
     ex = TwakExecutor(FakeClient(risk_level="medium"))
-    assert ex.pre_entry_check("BTC") is None
+    assert ex.pre_entry_check("ETH") is None
 
 
 def test_pre_entry_fails_closed_on_error():
@@ -59,34 +59,34 @@ def test_buy_routes_usdt_to_token_and_books_position():
     client = FakeClient(swap_out=0.05)
     ex = TwakExecutor(client)
     p = Portfolio(cash=150.0)
-    fill = ex.buy(p, "BTC", 30.0, 100000.0)
+    fill = ex.buy(p, "ETH", 30.0, 3000.0)
     # BEP-20 legs route by asset id, never bare symbol (symbol resolution is
     # unreliable: "SOL" once quoted BNB)
-    assert client.swaps == [(30.0, "USDT", SWAP_IDS["BTC"])]
-    assert SWAP_IDS["BTC"].startswith("c20000714_t0x")
+    assert client.swaps == [(30.0, "USDT", SWAP_IDS["ETH"])]
+    assert SWAP_IDS["ETH"].startswith("c20000714_t0x")
     assert p.cash == 120.0
-    assert p.positions["BTC"].qty == 0.05
-    assert abs(fill.price - 600.0) < 1e-9  # 30 USDT / 0.05 BTCB
+    assert p.positions["ETH"].qty == 0.05
+    assert abs(fill.price - 600.0) < 1e-9  # 30 USDT / 0.05
 
 
 def test_sell_books_pnl():
     client = FakeClient(swap_out=0.05)
     ex = TwakExecutor(client)
     p = Portfolio(cash=150.0)
-    ex.buy(p, "BTC", 30.0, 100000.0)
+    ex.buy(p, "ETH", 30.0, 3000.0)
     client.swap_out = 33.0  # sell proceeds in USDT
-    fill = ex.sell(p, "BTC", 105000.0)
+    fill = ex.sell(p, "ETH", 3150.0)
     assert p.cash == 120.0 + 33.0
     assert abs(fill.pnl_usdt - 3.0) < 1e-9
-    assert "BTC" not in p.positions
+    assert "ETH" not in p.positions
 
 
 def test_failed_sell_restores_position():
     client = FakeClient(swap_out=0.05)
     ex = TwakExecutor(client)
     p = Portfolio(cash=150.0)
-    ex.buy(p, "BTC", 30.0, 100000.0)
+    ex.buy(p, "ETH", 30.0, 3000.0)
     client.swap_out = 0  # broken swap response
     with pytest.raises(TwakError):
-        ex.sell(p, "BTC", 105000.0)
-    assert "BTC" in p.positions  # position restored, not silently lost
+        ex.sell(p, "ETH", 3150.0)
+    assert "ETH" in p.positions  # position restored, not silently lost

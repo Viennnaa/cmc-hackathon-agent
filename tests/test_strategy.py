@@ -27,11 +27,13 @@ def test_momentum_entry_requires_fresh_cross():
     assert sig.action == "hold"
 
 
-def test_momentum_sentiment_veto():
+def test_momentum_no_sentiment_veto():
+    """Veto removed for the PnL competition: the F&G reading no longer changes
+    momentum's decision (it trades through fear)."""
     prices = rising_then_cross()
-    sig = momentum.evaluate("BNB", prices, holding=False, fear_greed=10)
-    assert sig.action == "hold"
-    assert "sentiment veto" in sig.reason
+    assert (momentum.evaluate("ETH", prices, holding=False, fear_greed=10).action
+            == momentum.evaluate("ETH", prices, holding=False, fear_greed=50).action)
+    assert "sentiment veto" not in momentum.evaluate("ETH", prices, False, fear_greed=10).reason
 
 
 def test_momentum_regime_veto():

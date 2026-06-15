@@ -65,12 +65,15 @@ class StrategyState:
 
 
 def _score(ret: float, drawdown: float) -> float:
-    """Risk-adjusted ranking: a point of drawdown costs a point of return.
-
-    Matches what the judges score (returns AND drawdown) and keeps the
-    selection explainable in one line of the journal.
+    """PnL-first ranking for the competition (judged on total return, with
+    drawdown only as a ~30% disqualification gate). Pick the highest-return
+    strategy that stays clear of the DQ line: a trailing drawdown that would
+    have tripped the kill switch is penalized so the review never adopts a
+    DQ-prone variant; otherwise return is what wins.
     """
-    return ret - drawdown
+    if drawdown >= config.KILL_SWITCH_DRAWDOWN_PCT:
+        return ret - 10.0  # would have been killed -> never adopt
+    return ret
 
 
 def maybe_review(state: StrategyState, store: PriceStore, journal: Journal,

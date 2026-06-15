@@ -68,23 +68,49 @@ class UnreconciledOrderError(RuntimeError):
     """A previous order may have executed without being recorded."""
 
 
-def _buy(executor, journal, portfolio: Portfolio, sym: str, size_usdt: float, price: float):
+def _buy(executor, journal, portfolio: Portfolio, risk: RiskEngine,
+         sym: str, size_usdt: float, price: float):
     pending.write("buy", sym, size_usdt)
     fill = executor.buy(portfolio, sym, size_usdt, price)
     journal.fill(fill)
     portfolio.save(PORTFOLIO_PATH)
     pending.clear()
+    risk.note_trade()  # any executed trade satisfies the >=1 trade/day floor
+    risk.save(RISK_STATE_PATH)
     return fill
 
 
-def _sell(executor, journal, portfolio: Portfolio, sym: str, price: float):
+def _sell(executor, journal, portfolio: Portfolio, risk: RiskEngine,
+          sym: str, price: float):
     qty = portfolio.positions[sym].qty if sym in portfolio.positions else 0.0
     pending.write("sell", sym, qty)
     fill = executor.sell(portfolio, sym, price)
     journal.fill(fill)
     portfolio.save(PORTFOLIO_PATH)
     pending.clear()
+    risk.note_trade()
+    risk.save(RISK_STATE_PATH)
     return fill
+
+
+def _floor_needed(risk: RiskEngine, now: float) -> bool:
+    """True if the >=1 trade/day floor must act: the UTC day is still flat,
+    we are past the cutoff hour, and the agent is not killed."""
+    if risk.killed:
+        return False
+    if risk.last_trade_day >= int(now // 86_400):
+        return False
+    return time.gmtime(now).tm_hour >= config.DAILY_TRADE_FLOOR_HOUR_UTC
+
+
+def _floor_candidate(portfolio: Portfolio, quotes: dict) -> str | None:
+    """The eligible token for a minimal floor trade: the first quoted, un-held
+    symbol we can afford (floor symbol first), or None if none is available."""
+    size = config.DAILY_FLOOR_TRADE_USDT
+    cands = [config.DAILY_FLOOR_SYMBOL,
+             *(s for s in config.UNIVERSE if s != config.DAILY_FLOOR_SYMBOL)]
+    return next((c for c in cands if c in quotes and c not in portfolio.positions
+                 and portfolio.cash >= size), None)
 
 
 def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
@@ -127,7 +153,7 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
                           f"{sym} unquoted {gap:.0f}s >= {config.STALE_QUOTE_FLATTEN_SECONDS}s "
                           "-> protective exit at last mark", portfolio.equity())
             price = portfolio.last_prices.get(sym, portfolio.positions[sym].entry_price)
-            _sell(executor, journal, portfolio, sym, price)
+            _sell(executor, journal, portfolio, risk, sym, price)
             risk.note_exit(sym)
             risk.save(RISK_STATE_PATH)
             _quote_gap_since.pop(sym, None)
@@ -146,7 +172,7 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
         for sym in list(portfolio.positions):
             price = quotes[sym].price if sym in quotes else \
                 portfolio.last_prices.get(sym, portfolio.positions[sym].entry_price)
-            _sell(executor, journal, portfolio, sym, price)
+            _sell(executor, journal, portfolio, risk, sym, price)
             risk.note_exit(sym)
         risk.save(RISK_STATE_PATH)
         portfolio.save(PORTFOLIO_PATH)
@@ -161,7 +187,7 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
         if stop:
             sig = momentum.Signal(sym, "exit", "overridden by stop_loss")
             journal.decision(sym, q, sig, stop, fear_greed, portfolio.equity())
-            _sell(executor, journal, portfolio, sym, q.price)
+            _sell(executor, journal, portfolio, risk, sym, q.price)
             risk.note_exit(sym)
             risk.save(RISK_STATE_PATH)
             log.info("%s STOP-LOSS exit @ %.4f", sym, q.price)
@@ -182,13 +208,31 @@ def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
                 continue
             # narrow-only: the self-review can shrink entries, never grow them
             size = verdict.size_usdt * min(strategy_state.size_factor, 1.0)
-            fill = _buy(executor, journal, portfolio, sym, size, q.price)
+            fill = _buy(executor, journal, portfolio, risk, sym, size, q.price)
             log.info("%s ENTER %.6f @ %.4f (%s)", sym, fill.qty, fill.price, sig.reason)
         elif verdict.approved and verdict.action == "exit" and sym in portfolio.positions:
-            fill = _sell(executor, journal, portfolio, sym, q.price)
+            fill = _sell(executor, journal, portfolio, risk, sym, q.price)
             risk.note_exit(sym)
             risk.save(RISK_STATE_PATH)
             log.info("%s EXIT @ %.4f pnl=%.4f (%s)", sym, fill.price, fill.pnl_usdt, sig.reason)
+
+    # Daily-trade floor: the competition DQs any UTC day with zero trades.
+    if _floor_needed(risk, now):
+        cand = _floor_candidate(portfolio, quotes)
+        if cand:
+            size = config.DAILY_FLOOR_TRADE_USDT
+            journal.event("daily_trade_floor",
+                          f"day flat past {config.DAILY_TRADE_FLOOR_HOUR_UTC}:00 UTC -> "
+                          f"forcing minimal {size:.2f} USDT {cand} buy for >=1 trade/day",
+                          portfolio.equity())
+            _buy(executor, journal, portfolio, risk, cand, size, quotes[cand].price)
+            log.info("daily-trade floor: bought %.2f USDT %s", size, cand)
+        else:
+            msg = ("daily-trade floor could not place a trade (no spare cash or all "
+                   "candidates held) — manual trade may be needed to avoid DQ")
+            journal.event("daily_trade_floor_failed", msg, portfolio.equity())
+            log.warning(msg)
+            alerts.send(msg)
 
     portfolio.save(PORTFOLIO_PATH)
     log.info("equity %.2f USDT | cash %.2f | positions %s | f&g %s",
@@ -204,7 +248,7 @@ def _protective_flatten(executor, journal, portfolio: Portfolio, risk: RiskEngin
                   portfolio.equity())
     for sym in held:
         price = portfolio.last_prices.get(sym, portfolio.positions[sym].entry_price)
-        _sell(executor, journal, portfolio, sym, price)
+        _sell(executor, journal, portfolio, risk, sym, price)
         risk.note_exit(sym)
     risk.save(RISK_STATE_PATH)
     portfolio.save(PORTFOLIO_PATH)

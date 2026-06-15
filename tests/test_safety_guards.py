@@ -149,12 +149,12 @@ def test_live_start_refused_when_wallet_missing_held_token(isolated_paths):
         runner._reconcile_live(client, p, _journal(isolated_paths))
 
 
-def test_live_restart_accepts_matching_btcb_balance(isolated_paths):
+def test_live_restart_accepts_matching_balance(isolated_paths):
     client = FakeClient({"tokens": [{"symbol": "USDT", "balance": "5"},
                                     {"symbol": "BNB", "balance": "0.02"},
-                                    {"symbol": "BTCB", "balance": "0.0002"}]})
+                                    {"symbol": "ETH", "balance": "0.01"}]})
     p = Portfolio(cash=5.0, mode="live")
-    p.positions["BTC"] = Position("BTC", 0.0002, 100000.0, 1.0)
+    p.positions["ETH"] = Position("ETH", 0.01, 3000.0, 1.0)
     runner._reconcile_live(client, p, _journal(isolated_paths))  # no refusal
 
 

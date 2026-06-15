@@ -2,7 +2,7 @@
 
 Entry: MACD histogram CROSSES positive this bar (fresh trend turn, not a
 level — buying mid-trend strength backtested at -10% from whipsaw churn)
-AND RSI in [50, 70], with sentiment veto on extreme fear.
+AND RSI in [50, 70]. (No sentiment veto — the PnL competition trades through fear.)
 Exit: MACD histogram negative two consecutive bars (one-bar dips are
 noise) OR RSI > 75 (overbought).
 
@@ -49,9 +49,7 @@ def evaluate(
             return Signal(symbol, "exit", f"RSI overbought ({r:.1f} > {config.RSI_EXIT})", r, h)
         return Signal(symbol, "hold", "in position, trend intact", r, h)
 
-    # flat: consider entry
-    if fear_greed is not None and fear_greed < config.FEAR_GREED_VETO_BELOW:
-        return Signal(symbol, "hold", f"sentiment veto: fear&greed {fear_greed} < {config.FEAR_GREED_VETO_BELOW}", r, h)
+    # flat: consider entry (F&G veto removed for the PnL competition)
     if change_24h is not None and change_24h <= config.REGIME_MIN_24H_CHANGE:
         return Signal(symbol, "hold",
                       f"regime veto: 24h change {change_24h:.2f}% <= {config.REGIME_MIN_24H_CHANGE}%", r, h)

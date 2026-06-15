@@ -1,10 +1,11 @@
 """RISK layer: hard gates with final say over every strategy intent.
 
-Implements the judged rules from config:
-  1. max 20% of capital per position
-  2. per-trade stop-loss -3%
-  3. daily loss cap -5% -> flatten everything + halt 24h
-  4. kill switch at -10% drawdown from peak equity -> flatten + permanent stop
+Guardrails from config (tuned aggressive for the PnL competition; the only
+externally-binding limit is the ~30% drawdown DQ gate):
+  1. max position size per name (MAX_POSITION_PCT)
+  2. per-trade stop-loss (STOP_LOSS_PCT)
+  3. daily loss cap -> flatten + short cool-off (DAILY_LOSS_CAP_PCT / HALT_HOURS)
+  4. kill switch at KILL_SWITCH_DRAWDOWN_PCT drawdown from peak -> flatten + stop
 
 Every verdict carries the rule that fired so the journal shows
 inputs -> rule -> action for the judges' replay.
@@ -34,10 +35,15 @@ class RiskEngine:
         self.halted_until: float = 0.0
         self.killed: bool = False
         self.last_exit: dict[str, float] = {}
+        self.last_trade_day: int = 0  # UTC day of the last executed trade (>=1/day floor)
 
     def note_exit(self, symbol: str, now: float | None = None) -> None:
         """Record an exit so re-entries respect the cooldown (anti-churn)."""
         self.last_exit[symbol] = now or time.time()
+
+    def note_trade(self, now: float | None = None) -> None:
+        """Record that a trade executed today, for the >=1 trade/day floor."""
+        self.last_trade_day = int((now or time.time()) // 86_400)
 
     # --- persistence: judged halts MUST survive restarts ----------------------
     # Without this, systemd restarting the process would silently void the
@@ -49,6 +55,7 @@ class RiskEngine:
             "halted_until": self.halted_until,
             "killed": self.killed,
             "last_exit": self.last_exit,
+            "last_trade_day": self.last_trade_day,
         }))
         os.replace(tmp, path)
 
@@ -60,6 +67,7 @@ class RiskEngine:
             eng.halted_until = float(data.get("halted_until") or 0.0)
             eng.killed = bool(data.get("killed") or False)
             eng.last_exit = {k: float(v) for k, v in (data.get("last_exit") or {}).items()}
+            eng.last_trade_day = int(data.get("last_trade_day") or 0)
         return eng
 
     # --- portfolio-level checks, run BEFORE strategy intents -----------------
@@ -107,9 +115,10 @@ class RiskEngine:
     # --- gate on strategy intents --------------------------------------------
     def review(self, intent: str, symbol: str, portfolio: Portfolio, now: float | None = None,
                fear_greed: int | None = None) -> Verdict:
-        """fear_greed is engine-enforced (not just strategy convention): the
-        declared "F&G < 20 -> no new entries" rule must hold for EVERY
-        strategy, and an unavailable reading fails closed."""
+        """fear_greed is accepted for journaling/back-compat but no longer
+        vetoes entries: a PnL competition has to trade through fear. The only
+        portfolio circuit breakers are the daily cap (short cool-off) and the
+        kill switch; the per-entry checks below are guardrails."""
         now = now or time.time()
 
         if self.killed:
@@ -122,13 +131,6 @@ class RiskEngine:
         if now < self.halted_until:
             remaining = (self.halted_until - now) / 3600
             return Verdict(False, "none", "daily_halt", f"halted for another {remaining:.1f}h")
-        if fear_greed is None:
-            return Verdict(False, "none", "sentiment_veto",
-                           "fear&greed unavailable -> no new entries (fail closed)")
-        if fear_greed < config.FEAR_GREED_VETO_BELOW:
-            return Verdict(False, "none", "sentiment_veto",
-                           f"fear&greed {fear_greed} < {config.FEAR_GREED_VETO_BELOW} "
-                           "extreme fear -> no new entries")
         if symbol in portfolio.positions:
             return Verdict(False, "none", "single_position", f"already holding {symbol}")
         if len(portfolio.positions) >= config.MAX_CONCURRENT_POSITIONS:

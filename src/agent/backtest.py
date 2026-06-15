@@ -26,8 +26,12 @@ from agent.strategy import STRATEGIES
 
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
 CMC_FNG_URL = "https://pro-api.coinmarketcap.com/v3/fear-and-greed/historical"
-PAIRS = {"BNB": "BNBUSDT", "BTC": "BTCUSDT", "ETH": "ETHUSDT",
-         "SOL": "SOLUSDT", "XRP": "XRPUSDT", "CAKE": "CAKEUSDT"}
+# Binance klines (offline backtest only) for the eligible universe. Order
+# mirrors config.UNIVERSE; all have liquid USDT pairs on Binance.
+PAIRS = {"ETH": "ETHUSDT", "XRP": "XRPUSDT", "DOGE": "DOGEUSDT", "ADA": "ADAUSDT",
+         "LINK": "LINKUSDT", "AVAX": "AVAXUSDT", "LTC": "LTCUSDT", "AAVE": "AAVEUSDT",
+         "DOT": "DOTUSDT", "UNI": "UNIUSDT", "SHIB": "SHIBUSDT", "FET": "FETUSDT",
+         "INJ": "INJUSDT", "CAKE": "CAKEUSDT", "TWT": "TWTUSDT"}
 INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}
 
 
