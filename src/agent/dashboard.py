@@ -325,7 +325,7 @@ function render(s) {
 
   document.getElementById('cards').innerHTML = [
     {l:'Equity', v:`${eq.toFixed(2)}<span class="unit">USDT</span>`, s:`peak ${(p.peak_equity ?? eq).toFixed(2)}`},
-    {l:'Return', v:`${ret >= 0 ? '+' : ''}${ret.toFixed(2)}<span class="unit">%</span>`, c:ret >= 0 ? 'pos' : 'neg', s:`since baseline &middot; ${BASELINE} USDT`},
+    {l:'Return', v:`${ret >= 0 ? '+' : ''}${ret.toFixed(2)}<span class="unit">%</span>`, c:ret >= 0 ? 'pos' : 'neg', s:`started at ${BASELINE} USDT`},
     {l:'Cash', v:`${(p.cash ?? 0).toFixed(2)}<span class="unit">USDT</span>`, s:positions.length ? `${(eq - (p.cash ?? 0)).toFixed(2)} in positions` : 'fully in cash'},
     {l:'Open positions', v:String(positions.length), s:positions.length ? esc(positions.join(' · ')) : 'flat &mdash; waiting for signal'},
     {l:'Max drawdown', v:`${dd.toFixed(2)}<span class="unit">%</span>`, c:dd > 5 ? 'neg' : '', s:`full-res over ${s.drawdown_samples ?? vals.length} samples`},
@@ -419,7 +419,7 @@ function drawChart(es) {
   x.setLineDash([4, 4]); x.strokeStyle = 'rgba(148,163,184,.55)';
   x.beginPath(); x.moveTo(PL, by); x.lineTo(w - PR, by); x.stroke();
   x.setLineDash([]);
-  x.textAlign = 'left'; x.fillStyle = '#94A3B8'; x.fillText('baseline ' + BASELINE, PL + 4, by - 9);
+  x.textAlign = 'left'; x.fillStyle = '#94A3B8'; x.fillText('start ' + BASELINE, PL + 4, by - 9);
 
   const grad = x.createLinearGradient(0, PT, 0, H - PB);
   grad.addColorStop(0, 'rgba(245,158,11,.25)'); grad.addColorStop(1, 'rgba(245,158,11,0)');
