@@ -12,10 +12,10 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-from agent import config
+from agent import config, review
 from agent.narrator import NARRATION_PATH
 from agent.record.journal import read_jsonl_tail
-from agent.runner import JOURNAL_PATH, LEDGER_PATH, PORTFOLIO_PATH
+from agent.runner import JOURNAL_PATH, LEDGER_PATH, PORTFOLIO_PATH, RISK_STATE_PATH
 
 PORT = 8765
 
@@ -75,6 +75,9 @@ def state() -> dict:
     # configured starting capital (pre-upgrade state files lack the field)
     baseline = portfolio.get("baseline_equity") or config.get_settings().starting_capital
 
+    strat = review.StrategyState.load()
+    risk_state = json.loads(RISK_STATE_PATH.read_text()) if RISK_STATE_PATH.exists() else {}
+
     return {
         "now": time.time(),
         "mode": config.get_settings().mode,
@@ -90,6 +93,19 @@ def state() -> dict:
         "decisions": [r for r in journal if "signal" in r][-40:][::-1],
         "fills": ledger[::-1],
         "narration": _read_jsonl(NARRATION_PATH, limit=40)[::-1],
+        "strategy": strat.strategy,
+        "size_factor": strat.size_factor,
+        "risk": {
+            "kill_switch_pct": round(config.KILL_SWITCH_DRAWDOWN_PCT * 100, 1),
+            "daily_cap_pct": round(config.DAILY_LOSS_CAP_PCT * 100, 1),
+            "stop_pct": round(config.STOP_LOSS_PCT * 100, 1),
+            "max_position_pct": round(config.MAX_POSITION_PCT * 100, 1),
+            "max_concurrent": config.MAX_CONCURRENT_POSITIONS,
+            "killed": bool(risk_state.get("killed")),
+            "halted_until": risk_state.get("halted_until") or 0,
+            "last_trade_day": int(risk_state.get("last_trade_day") or 0),
+            "floor_hour_utc": config.DAILY_TRADE_FLOOR_HOUR_UTC,
+        },
     }
 
 
@@ -194,60 +210,119 @@ PAGE = """<!doctype html>
   .pos-sub{display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-size:11px;color:var(--fg2);font-variant-numeric:tabular-nums}
   .pos-empty{color:var(--fg2);font-size:12.5px;padding:6px 2px}
   @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+  /* ---- console shell: sidebar nav + tabbed main ---- */
+  body{padding:0}
+  .app{display:grid;grid-template-columns:238px minmax(0,1fr);min-height:100dvh}
+  .side{position:sticky;top:0;align-self:start;height:100dvh;display:flex;flex-direction:column;gap:18px;padding:20px 14px;background:var(--surface);border-right:1px solid var(--border)}
+  .brand{display:flex;align-items:center;gap:11px;padding:2px 6px}
+  .brand-t h1{font-size:14.5px;margin:0;font-weight:600;letter-spacing:-.01em}
+  .brand-t small{display:block;font-size:10.5px;color:var(--fg2);letter-spacing:.02em}
+  .nav{display:flex;flex-direction:column;gap:4px}
+  .nav-i{display:flex;align-items:center;gap:11px;width:100%;text-align:left;cursor:pointer;background:none;border:1px solid transparent;border-radius:9px;padding:9px 11px;color:var(--fg2);font:inherit;font-size:13px;font-weight:500;transition:background .15s,color .15s,border-color .15s}
+  .nav-i svg{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .nav-i:hover{background:var(--muted);color:var(--fg)}
+  .nav-i[aria-selected="true"]{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.35);color:var(--gold)}
+  .nav-i[aria-selected="true"] svg{color:var(--gold)}
+  .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px;padding:0 6px}
+  .main{min-width:0;padding:22px 24px 44px;display:flex;flex-direction:column;gap:16px}
+  .topbar{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .topbar h2{font-size:18px;font-weight:600;margin:0;letter-spacing:-.01em}
+  .topbar .meta{font-size:12px;color:var(--fg2)}
+  .panel{display:flex;flex-direction:column;gap:16px;animation:fade .2s ease}
+  .panel[hidden]{display:none}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  @media (max-width:900px){
+    .app{grid-template-columns:1fr}
+    .side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px 14px;border-right:none;border-bottom:1px solid var(--border)}
+    .brand{flex:1 1 auto}
+    .nav{flex-direction:row;flex-wrap:wrap;gap:6px;order:3;width:100%}
+    .nav-i{width:auto}
+    .side-foot{margin:0;flex-direction:row;align-items:center;gap:12px}
+  }
 </style></head><body>
-<div class="wrap">
-<header>
-  <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></div>
-  <h1>CMC Disciplined Trader<small>autonomous BSC trading agent</small></h1>
-  <span class="chip" id="mode">&mdash;</span>
-  <div class="spacer"></div>
-  <div class="status" id="status"><span class="dot" aria-hidden="true"></span><span id="updated">connecting&hellip;</span></div>
-</header>
+<div class="app">
+<aside class="side">
+  <div class="brand">
+    <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></div>
+    <div class="brand-t"><h1>CMC Disciplined Trader</h1><small>autonomous BSC agent</small></div>
+  </div>
+  <nav class="nav" role="tablist" aria-label="Dashboard sections" aria-orientation="vertical">
+    <button class="nav-i" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg><span>Overview</span></button>
+    <button class="nav-i" role="tab" id="tab-strategy" aria-controls="panel-strategy" aria-selected="false" tabindex="-1" data-tab="strategy">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg><span>Strategy</span></button>
+    <button class="nav-i" role="tab" id="tab-risk" aria-controls="panel-risk" aria-selected="false" tabindex="-1" data-tab="risk">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span>Risk</span></button>
+    <button class="nav-i" role="tab" id="tab-activity" aria-controls="panel-activity" aria-selected="false" tabindex="-1" data-tab="activity">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span>Activity</span></button>
+  </nav>
+  <div class="side-foot">
+    <span class="chip" id="mode">&mdash;</span>
+    <div class="status" id="status"><span class="dot" aria-hidden="true"></span><span id="updated">connecting&hellip;</span></div>
+  </div>
+</aside>
 
-<div class="kpis" id="cards" aria-live="polite"></div>
+<main class="main">
+<header class="topbar"><h2 id="page-title">Overview</h2><span class="meta" id="page-sub"></span></header>
 
-<div class="deck">
+<section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+  <div class="kpis" id="cards" aria-live="polite"></div>
+  <div class="deck">
+    <div class="card table-card">
+      <div class="card-h"><h2>Equity curve <span class="unit">USDT</span></h2><span class="meta num" id="chartmeta"></span></div>
+      <div class="pad" id="chartwrap">
+        <canvas id="chart" role="img" aria-label="Equity over time"></canvas>
+        <div id="xline" aria-hidden="true"></div><div id="tip" aria-hidden="true"></div>
+        <div class="empty" id="chartempty" style="display:none">Collecting equity data &mdash; first points arrive within a couple of polls.</div>
+      </div>
+    </div>
+    <div class="rail">
+      <div class="card table-card">
+        <div class="card-h"><h2>Open positions</h2><span class="meta num" id="posmeta"></span></div>
+        <div class="pad"><div class="pos-list" id="positions"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="panel-strategy" role="tabpanel" aria-labelledby="tab-strategy" tabindex="0" hidden>
+  <div class="kpis" id="strat-cards"></div>
   <div class="card table-card">
-    <div class="card-h"><h2>Equity curve <span class="unit">USDT</span></h2><span class="meta num" id="chartmeta"></span></div>
-    <div class="pad" id="chartwrap">
-      <canvas id="chart" role="img" aria-label="Equity over time"></canvas>
-      <div id="xline" aria-hidden="true"></div><div id="tip" aria-hidden="true"></div>
-      <div class="empty" id="chartempty" style="display:none">Collecting equity data &mdash; first points arrive within a couple of polls.</div>
-    </div>
+    <div class="card-h"><h2>Universe</h2><span class="meta">eligible BEP-20 tokens &middot; held highlighted</span></div>
+    <div class="pad gates" id="universe-chips"></div>
   </div>
-  <div class="rail">
-    <div class="card table-card">
-      <div class="card-h"><h2>Open positions</h2><span class="meta num" id="posmeta"></span></div>
-      <div class="pad"><div class="pos-list" id="positions"></div></div>
-    </div>
-    <div class="card table-card">
-      <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">risk gates &amp; nightly reviews &middot; click to expand</span></div>
-      <div class="pad gates" id="rules"></div>
-      <div class="gate-detail" id="gate-detail" hidden></div>
-    </div>
+  <div class="card table-card">
+    <div class="card-h"><h2>Latest decisions</h2><span class="meta">journal &middot; newest first &middot; UTC</span></div>
+    <div class="table-wrap scroll-cap"><table id="decisions">
+      <thead><tr><th>time</th><th>asset</th><th class="r">price</th><th class="r">rsi</th><th>action</th><th>risk rule</th><th>reason</th></tr></thead>
+      <tbody></tbody></table></div>
   </div>
-</div>
+</section>
 
-<div class="card table-card">
-  <div class="card-h"><h2>Latest decisions</h2><span class="meta">journal &middot; newest first &middot; UTC</span></div>
-  <div class="table-wrap scroll-cap"><table id="decisions">
-    <thead><tr><th>time</th><th>asset</th><th class="r">price</th><th class="r">rsi</th><th>action</th><th>risk rule</th><th>reason</th></tr></thead>
-    <tbody></tbody></table></div>
-</div>
+<section class="panel" id="panel-risk" role="tabpanel" aria-labelledby="tab-risk" tabindex="0" hidden>
+  <div class="kpis" id="risk-cards"></div>
+  <div class="card table-card">
+    <div class="card-h"><h2>Risk-gate activity</h2><span class="meta">risk gates &amp; nightly reviews &middot; click to expand</span></div>
+    <div class="pad gates" id="rules"></div>
+    <div class="gate-detail" id="gate-detail" hidden></div>
+  </div>
+</section>
 
-<div class="card table-card">
-  <div class="card-h"><h2>Fills</h2><span class="meta">ledger &middot; newest first &middot; UTC</span></div>
-  <div class="table-wrap scroll-cap"><table id="fills">
-    <thead><tr><th>time</th><th>side</th><th>asset</th><th class="r">qty</th><th class="r">price</th><th class="r">pnl (usdt)</th></tr></thead>
-    <tbody></tbody></table></div>
-</div>
-
-<div class="card table-card" id="narration-card" style="display:none">
-  <div class="card-h"><h2>Agent commentary</h2><span class="meta">observe-only &middot; never trades</span></div>
-  <div class="pad narration-scroll" id="narration"></div>
-</div>
+<section class="panel" id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" tabindex="0" hidden>
+  <div class="card table-card">
+    <div class="card-h"><h2>Fills</h2><span class="meta">ledger &middot; newest first &middot; UTC</span></div>
+    <div class="table-wrap scroll-cap"><table id="fills">
+      <thead><tr><th>time</th><th>side</th><th>asset</th><th class="r">qty</th><th class="r">price</th><th class="r">pnl (usdt)</th></tr></thead>
+      <tbody></tbody></table></div>
+  </div>
+  <div class="card table-card" id="narration-card" style="display:none">
+    <div class="card-h"><h2>Agent commentary</h2><span class="meta">observe-only &middot; never trades</span></div>
+    <div class="pad narration-scroll" id="narration"></div>
+  </div>
+</section>
 
 <footer>Deterministic strategy core &middot; hard risk gates &middot; full decision log &mdash; this dashboard reads journal.jsonl, ledger.jsonl and portfolio.json directly; it is a view, never a second source of truth.</footer>
+</main>
 </div>
 <script>
 let BASELINE = 150;  // judged baseline; replaced by /api/state's value
@@ -333,6 +408,33 @@ function render(s) {
      extra:fg != null ? `<div class="gauge" aria-hidden="true"><i style="left:${Math.min(Math.max(fg, 0), 100)}%"></i></div>` : ''},
   ].map(k => `<div class="card kpi ${k.c || ''}"><div class="l">${k.l}</div><div class="v num">${k.v}</div><div class="s">${k.s}</div>${k.extra || ''}</div>`).join('');
 
+  // ---- Strategy tab ----
+  const sf = s.size_factor ?? 1;
+  document.getElementById('strat-cards').innerHTML = [
+    {l:'Active strategy', v:esc(s.strategy || 'adaptive'), s:'regime router &middot; momentum / mean-revert / cash'},
+    {l:'Size factor', v:`${(sf * 100).toFixed(0)}<span class="unit">%</span>`, s:sf < 1 ? 'narrowed by nightly self-review' : 'full entry size'},
+    {l:'Universe', v:String((s.universe || []).length), s:`${positions.length} held now`},
+  ].map(k => `<div class="card kpi"><div class="l">${k.l}</div><div class="v num">${k.v}</div><div class="s">${k.s}</div></div>`).join('');
+  document.getElementById('universe-chips').innerHTML = (s.universe || []).map(sym =>
+    `<span class="gate${positions.includes(sym) ? ' active' : ''}">${esc(sym)}${positions.includes(sym) ? ' <b>held</b>' : ''}</span>`).join('');
+
+  // ---- Risk tab ----
+  const rk = s.risk || {};
+  const killPct = rk.kill_switch_pct ?? 25;
+  const ddRatio = killPct ? Math.min(dd / killPct, 1) : 0;
+  const today = Math.floor(s.now / 86400);
+  const tradedToday = (rk.last_trade_day || 0) >= today;
+  const halted = (rk.halted_until || 0) > s.now;
+  document.getElementById('risk-cards').innerHTML = [
+    {l:'Drawdown vs kill', v:`${dd.toFixed(1)}<span class="unit">/ ${killPct}%</span>`, c:dd > killPct * 0.6 ? 'neg' : '',
+     s:rk.killed ? '<span style="color:var(--red)">kill switch engaged</span>' : `${Math.max(killPct - dd, 0).toFixed(1)}% headroom left`,
+     extra:`<div class="gauge" aria-hidden="true" style="background:linear-gradient(90deg,var(--green),var(--amber) 65%,var(--red))"><i style="left:${(ddRatio * 100).toFixed(0)}%"></i></div>`},
+    {l:'Daily-trade floor', v:tradedToday ? 'met' : 'pending', c:tradedToday ? 'pos' : '',
+     s:`&ge;1 trade/day${halted ? ' &middot; cooling off' : ''}`},
+    {l:'Position cap', v:`${rk.max_position_pct ?? '&mdash;'}<span class="unit">%</span>`, s:`max ${rk.max_concurrent ?? '&mdash;'} concurrent`},
+    {l:'Per-trade stop', v:`-${rk.stop_pct ?? '&mdash;'}<span class="unit">%</span>`, s:`daily cap -${rk.daily_cap_pct ?? '&mdash;'}%`},
+  ].map(k => `<div class="card kpi ${k.c || ''}"><div class="l">${k.l}</div><div class="v num">${k.v}</div><div class="s">${k.s}</div>${k.extra || ''}</div>`).join('');
+
   document.getElementById('positions').innerHTML = positions.length ? posList
     : '<div class="pos-empty">Flat &mdash; waiting for a signal.</div>';
   const tcls = totalUpl >= 0 ? 'gain' : 'loss', tsg = totalUpl >= 0 ? '+' : '';
@@ -385,6 +487,7 @@ function render(s) {
 
 function drawChart(es) {
   const wrap = document.getElementById('chartwrap');
+  if (wrap.clientWidth < 60) return;  // panel hidden (other tab) - redrawn on tab switch
   const c = document.getElementById('chart');
   const emptyEl = document.getElementById('chartempty');
   if (es.length < 2) { c.style.display = 'none'; emptyEl.style.display = 'block'; pts = []; return; }
@@ -513,6 +616,35 @@ rulesEl.addEventListener('keydown', ev => {
     if (chip) { ev.preventDefault(); chip.click(); }
   }
 });
+
+// ---- sidebar tabs (ARIA tablist; roving focus + arrow keys; persisted) ----
+const TAB_TITLES = {overview:'Overview', strategy:'Strategy', risk:'Risk', activity:'Activity'};
+const tabs = [...document.querySelectorAll('.nav-i[role=tab]')];
+function selectTab(name, focus) {
+  tabs.forEach(t => {
+    const on = t.dataset.tab === name;
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    t.tabIndex = on ? 0 : -1;
+    document.getElementById('panel-' + t.dataset.tab).hidden = !on;
+    if (on && focus) t.focus();
+  });
+  document.getElementById('page-title').textContent = TAB_TITLES[name] || '';
+  try { localStorage.setItem('dash_tab', name); } catch (e) {}
+  if (name === 'overview' && lastState) drawChart(lastState.equity_series);  // canvas needs a visible width
+}
+tabs.forEach((t, i) => {
+  t.addEventListener('click', () => selectTab(t.dataset.tab));
+  t.addEventListener('keydown', ev => {
+    const horiz = window.matchMedia('(max-width:900px)').matches;
+    if ((horiz ? ['ArrowRight', 'ArrowDown'] : ['ArrowDown']).includes(ev.key)) {
+      ev.preventDefault(); selectTab(tabs[(i + 1) % tabs.length].dataset.tab, true);
+    } else if ((horiz ? ['ArrowLeft', 'ArrowUp'] : ['ArrowUp']).includes(ev.key)) {
+      ev.preventDefault(); selectTab(tabs[(i - 1 + tabs.length) % tabs.length].dataset.tab, true);
+    } else if (ev.key === 'Home') { ev.preventDefault(); selectTab(tabs[0].dataset.tab, true); }
+    else if (ev.key === 'End') { ev.preventDefault(); selectTab(tabs[tabs.length - 1].dataset.tab, true); }
+  });
+});
+try { const saved = localStorage.getItem('dash_tab'); if (saved && TAB_TITLES[saved]) selectTab(saved); } catch (e) {}
 
 tick(); setInterval(tick, 5000);
 </script></body></html>"""
