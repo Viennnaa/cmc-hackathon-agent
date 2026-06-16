@@ -76,6 +76,10 @@ def state() -> dict:
     baseline = portfolio.get("baseline_equity") or config.get_settings().starting_capital
 
     strat = review.StrategyState.load()
+    # latest nightly self-review scorecard (a once-a-day event the journal tail
+    # can't reliably hold) — written by review.py, read here as a pure view
+    self_review = (json.loads(review.SELF_REVIEW_PATH.read_text())
+                   if review.SELF_REVIEW_PATH.exists() else None)
     risk_state = json.loads(RISK_STATE_PATH.read_text()) if RISK_STATE_PATH.exists() else {}
 
     return {
@@ -95,6 +99,7 @@ def state() -> dict:
         "narration": _read_jsonl(NARRATION_PATH, limit=40)[::-1],
         "strategy": strat.strategy,
         "size_factor": strat.size_factor,
+        "self_review": self_review,
         "risk": {
             "kill_switch_pct": round(config.KILL_SWITCH_DRAWDOWN_PCT * 100, 1),
             "daily_cap_pct": round(config.DAILY_LOSS_CAP_PCT * 100, 1),
@@ -287,6 +292,12 @@ PAGE = """<!doctype html>
 
 <section class="panel" id="panel-strategy" role="tabpanel" aria-labelledby="tab-strategy" tabindex="0" hidden>
   <div class="kpis" id="strat-cards"></div>
+  <div class="card table-card" id="selfreview-card" style="display:none">
+    <div class="card-h"><h2>Last self-review</h2><span class="meta" id="selfreview-meta">nightly &middot; replays the agent's own history &middot; UTC</span></div>
+    <div class="table-wrap"><table id="selfreview">
+      <thead><tr><th>strategy</th><th class="r">return</th><th class="r">max dd</th><th class="r">trips</th><th class="r">score</th><th>verdict</th></tr></thead>
+      <tbody></tbody></table></div>
+  </div>
   <div class="card table-card">
     <div class="card-h"><h2>Universe</h2><span class="meta">eligible BEP-20 tokens &middot; held highlighted</span></div>
     <div class="pad gates" id="universe-chips"></div>
@@ -417,6 +428,35 @@ function render(s) {
   ].map(k => `<div class="card kpi"><div class="l">${k.l}</div><div class="v num">${k.v}</div><div class="s">${k.s}</div></div>`).join('');
   document.getElementById('universe-chips').innerHTML = (s.universe || []).map(sym =>
     `<span class="gate${positions.includes(sym) ? ' active' : ''}">${esc(sym)}${positions.includes(sym) ? ' <b>held</b>' : ''}</span>`).join('');
+
+  // ---- nightly self-review scorecard (the agent grading itself) ----
+  const sr = s.self_review;
+  const srCard = document.getElementById('selfreview-card');
+  if (sr && sr.scorecard) {
+    srCard.style.display = '';
+    // best score first so the adopted row reads at the top at a glance
+    const rows = Object.entries(sr.scorecard)
+      .sort((a, b) => (b[1].score ?? -Infinity) - (a[1].score ?? -Infinity));
+    document.querySelector('#selfreview tbody').innerHTML = rows.map(([name, v]) => {
+      const adopted = name === sr.adopted;
+      const r = (v.return ?? 0) * 100, d = (v.max_drawdown ?? 0) * 100;
+      const verdict = adopted
+        ? `<span class="pill ${sr.switched ? 'enter' : 'info'}">${sr.switched ? 'switched to' : 'kept'}</span>`
+        : '<span class="dim">&mdash;</span>';
+      return `<tr${adopted ? ' style="background:var(--muted)"' : ''}>
+        <td>${esc(name)}${adopted ? ' <b style="color:var(--gold)">&starf;</b>' : ''}</td>
+        <td class="r ${r >= 0 ? 'gain' : 'loss'}">${r >= 0 ? '+' : ''}${r.toFixed(2)}%</td>
+        <td class="r">${d.toFixed(2)}%</td>
+        <td class="r">${v.trades ?? 0}</td>
+        <td class="r">${(v.score ?? 0).toFixed(4)}</td>
+        <td>${verdict}</td></tr>`;
+    }).join('');
+    const sf2 = ((sr.size_factor ?? 1) * 100).toFixed(0);
+    document.getElementById('selfreview-meta').innerHTML =
+      `${fmt(sr.ts)} UTC &middot; trailing ${sr.trailing_bars ?? 0} bars &middot; size factor ${sf2}%`;
+  } else {
+    srCard.style.display = 'none';
+  }
 
   // ---- Risk tab ----
   const rk = s.risk || {};

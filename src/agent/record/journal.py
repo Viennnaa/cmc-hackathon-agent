@@ -65,8 +65,12 @@ class Journal:
             "equity": round(equity, 4),
         })
 
-    def event(self, kind: str, detail: str, equity: float | None = None) -> None:
-        self._append(self._journal, {"event": kind, "detail": detail, "equity": equity})
+    def event(self, kind: str, detail: str, equity: float | None = None,
+              extra: dict | None = None) -> None:
+        record = {"event": kind, "detail": detail, "equity": equity}
+        if extra:
+            record.update(extra)  # structured fields for machine-readable replay
+        self._append(self._journal, record)
 
     def fill(self, fill: object) -> None:
         self._append(self._ledger, asdict(fill))

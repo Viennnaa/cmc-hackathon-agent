@@ -27,6 +27,11 @@ from agent.strategy import DEFAULT_STRATEGY, STRATEGIES
 log = logging.getLogger("agent")
 
 STRATEGY_STATE_PATH = config.DATA_DIR / "strategy_state.json"
+# Latest scorecard snapshot for the dashboard to read O(1). The full history
+# lives in the journal (self_review events); a once-a-day event sits far
+# outside any bounded journal tail, so the dashboard reads this file instead —
+# same view-only pattern as strategy_state.json / risk_state.json.
+SELF_REVIEW_PATH = config.DATA_DIR / "self_review.json"
 
 # replay capital is nominal — only relative return/drawdown matter here
 _REPLAY_CAPITAL = 150.0
@@ -131,6 +136,32 @@ def maybe_review(state: StrategyState, store: PriceStore, journal: Journal,
                           f"score {v['score']:+.4f}" for k, v in results.items())
               + f" -> {'SWITCH to' if switched else 'keep'} {best}"
               + f" @ size factor {state.size_factor}")
-    journal.event("self_review", detail, equity)
+    snapshot = {
+        "reviewed_day": today,
+        "ts": now,
+        "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "trailing_bars": n_bars,
+        "adopted": best,
+        "size_factor": state.size_factor,
+        "switched": switched,
+        "scorecard": results,
+    }
+    _write_snapshot(snapshot)
+    # structured fields ride alongside the human-readable detail so the judged
+    # replay (and the dashboard's history, if it ever needs more than the latest)
+    # is machine-readable, not a string to re-parse
+    journal.event("self_review", detail, equity, extra={k: snapshot[k] for k in
+                  ("reviewed_day", "trailing_bars", "adopted", "size_factor",
+                   "switched", "scorecard")})
     log.info("self-review: %s", detail)
     return True
+
+
+def _write_snapshot(data: dict, path: Path | None = None) -> None:
+    """Atomically write the latest scorecard (tmp + os.replace), so a reader
+    never sees a half-written file — same discipline as StrategyState.save."""
+    path = path or SELF_REVIEW_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, path)
