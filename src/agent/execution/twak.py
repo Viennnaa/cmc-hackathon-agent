@@ -197,6 +197,32 @@ class TwakClient:
             args += ["--password", password]
         return _run(args)
 
+    def x402_quote(self, url: str) -> dict:
+        """Read-only preview of an x402 endpoint's payment options. No wallet,
+        no signature, no spend — used to confirm the endpoint is live and the
+        documented route is offered before any paid call."""
+        return _run(["x402", "quote", url])
+
+    def x402_request(self, url: str, network: str, asset: str, method: str,
+                     max_payment_atomic: str) -> dict:
+        """Pay an x402-gated endpoint, pinned to one route (CMC documents only
+        USDC-on-Base via EIP-3009, which is gasless — no approval tx). --max-payment
+        caps auto-approval to the exact charge; --yes skips the prompt up to that
+        cap. Password comes from TWAK_WALLET_PASSWORD, same as swaps."""
+        args = [
+            "x402", "request", url,
+            "--prefer-network", network,
+            "--prefer-asset", asset,
+            "--prefer-method", method,
+            "--max-payment", max_payment_atomic,
+            "--yes",
+        ]
+        password = os.getenv("TWAK_WALLET_PASSWORD", "")
+        if password:
+            args += ["--password", password]
+        # the payment + on-chain settlement can outrun the default swap timeout
+        return _run(args, timeout=180)
+
 
 class TwakExecutor:
     """Live executor: same buy/sell interface as PaperExecutor.

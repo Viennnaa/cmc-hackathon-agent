@@ -12,7 +12,7 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-from agent import config, review
+from agent import config, review, x402
 from agent.narrator import NARRATION_PATH
 from agent.record.journal import read_jsonl_tail
 from agent.runner import JOURNAL_PATH, LEDGER_PATH, PORTFOLIO_PATH, RISK_STATE_PATH
@@ -80,6 +80,10 @@ def state() -> dict:
     # can't reliably hold) — written by review.py, read here as a pure view
     self_review = (json.loads(review.SELF_REVIEW_PATH.read_text())
                    if review.SELF_REVIEW_PATH.exists() else None)
+    # x402 autonomous-micropayment summary (opt-in; state written by x402.py)
+    settings = config.get_settings()
+    x402_state = (json.loads(x402.X402_STATE_PATH.read_text())
+                  if x402.X402_STATE_PATH.exists() else None)
     risk_state = json.loads(RISK_STATE_PATH.read_text()) if RISK_STATE_PATH.exists() else {}
 
     return {
@@ -100,6 +104,10 @@ def state() -> dict:
         "strategy": strat.strategy,
         "size_factor": strat.size_factor,
         "self_review": self_review,
+        "x402": {"enabled": settings.x402_enabled,
+                 "max_spend_usd": settings.x402_max_spend_usd,
+                 "payer": config.X402_PAYER, "usdc": config.X402_ASSET,
+                 "state": x402_state},
         "risk": {
             "kill_switch_pct": round(config.KILL_SWITCH_DRAWDOWN_PCT * 100, 1),
             "daily_cap_pct": round(config.DAILY_LOSS_CAP_PCT * 100, 1),
@@ -326,6 +334,10 @@ PAGE = """<!doctype html>
       <thead><tr><th>time</th><th>side</th><th>asset</th><th class="r">qty</th><th class="r">price</th><th class="r">pnl (usdt)</th></tr></thead>
       <tbody></tbody></table></div>
   </div>
+  <div class="card table-card" id="x402-card" style="display:none">
+    <div class="card-h"><h2>x402 micropayments</h2><span class="meta">autonomous on-chain payment &middot; USDC on Base</span></div>
+    <div class="pad" id="x402-body"></div>
+  </div>
   <div class="card table-card" id="narration-card" style="display:none">
     <div class="card-h"><h2>Agent commentary</h2><span class="meta">observe-only &middot; never trades</span></div>
     <div class="pad narration-scroll" id="narration"></div>
@@ -499,6 +511,39 @@ function render(s) {
   document.getElementById('narration-card').style.display = notes.length ? '' : 'none';
   document.getElementById('narration').innerHTML = notes.map(n =>
     `<div class="note"><span class="ts num">${fmtS(n.ts)}</span><p>${esc(n.text)}</p></div>`).join('');
+
+  // ---- x402 autonomous micropayments (the agent paying for data on-chain) ----
+  const x = s.x402, xCard = document.getElementById('x402-card');
+  if (x && (x.enabled || x.state)) {
+    xCard.style.display = '';
+    const st = x.state || {};
+    const spent = st.spent_usd ?? 0, cap = x.max_spend_usd ?? 0, calls = st.calls ?? 0;
+    const pct = cap ? Math.min(spent / cap * 100, 100) : 0;
+    const statePill = x.enabled
+      ? '<span class="pill enter">enabled</span>'
+      : '<span class="pill hold">disabled</span>';
+    // eip3009 settles server-side (no per-call tx); link the wallet's USDC
+    // transfers on BaseScan as aggregate on-chain proof of the payments
+    const scan = (x.payer && x.usdc)
+      ? `<a class="gate" href="https://basescan.org/token/${esc(x.usdc)}?a=${esc(x.payer)}" target="_blank" rel="noopener">on-chain proof &nearr;</a>`
+      : '';
+    let last = '<span class="dim">no payment yet</span>';
+    if (st.last_iso) {
+      const xcheck = (st.last_price != null && st.last_primary_price != null)
+        ? `paid ${(+st.last_price).toFixed(2)} vs feed ${(+st.last_primary_price).toFixed(2)} (${st.last_delta_pct >= 0 ? '+' : ''}${(+st.last_delta_pct).toFixed(3)}%)`
+        : 'settled (gasless · EIP-3009)';
+      last = `${fmt(new Date(st.last_iso).getTime() / 1000)} UTC &middot; ${xcheck}`;
+    }
+    document.getElementById('x402-body').innerHTML =
+      `<div class="gates" style="margin-bottom:10px">${statePill}
+         <span class="gate"><b class="num">${calls}</b> paid calls</span>
+         <span class="gate">spent <b class="num">$${spent.toFixed(2)}</b> / $${cap.toFixed(2)}</span>
+         ${scan}</div>
+       <div class="gauge" aria-hidden="true" style="background:linear-gradient(90deg,var(--green),var(--amber) 80%,var(--red))"><i style="left:${pct.toFixed(0)}%"></i></div>
+       <div style="margin-top:11px;color:var(--fg2);font-size:12px">Last: ${last}</div>`;
+  } else {
+    xCard.style.display = 'none';
+  }
 
   document.getElementById('chartmeta').textContent = es.length > 1
     ? `${es.length} samples · ${fmt(es[0].ts)} → ${fmt(es[es.length - 1].ts)} UTC` : '';

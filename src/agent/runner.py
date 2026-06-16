@@ -18,7 +18,7 @@ import os
 import socket
 import time
 
-from agent import alerts, config, narrator, review
+from agent import alerts, config, narrator, review, x402
 from agent.data.cmc import CMCClient, CMCError
 from agent.data.store import PriceStore
 from agent.execution import pending
@@ -443,6 +443,18 @@ def main() -> None:
     # trade on a full regime/MACD window rather than blind through the warm-up.
     _warm_start(cmc, store)
 
+    # x402 autonomous micropayments (opt-in). The on-chain spend is independent
+    # of the paper/live trade path, so it needs its own wallet client even in
+    # paper mode; off entirely unless X402_ENABLED.
+    x402_state = x402.X402State.load()
+    x402_client = None
+    if settings.x402_enabled:
+        from agent.execution.twak import TwakClient
+        x402_client = client if settings.mode == "live" else TwakClient()
+        log.info("x402 ENABLED: paying CMC hourly in USDC on Base, cap $%.2f "
+                 "(spent $%.2f over %d calls so far)",
+                 settings.x402_max_spend_usd, x402_state.spent_usd, x402_state.calls)
+
     cmc_down_since: float | None = None
     last_gas_check = time.time()
     while True:
@@ -461,6 +473,11 @@ def main() -> None:
                 narrator.maybe_narrate(portfolio, risk)
             except Exception as e:  # noqa: BLE001 — narration must never affect trading
                 log.warning("narrator failed (trading unaffected): %s", e)
+            if x402_client is not None:
+                try:
+                    x402.maybe_pay(x402_client, store, journal, settings, x402_state)
+                except Exception as e:  # noqa: BLE001 — x402 must never affect trading
+                    log.warning("x402 loop failed (trading unaffected): %s", e)
         except CMCError as e:
             # Transient sense failure: tolerable while flat, not while exposed —
             # no prices means no stop-loss. Flatten after the staleness budget.

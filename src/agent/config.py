@@ -117,6 +117,27 @@ LIVE_QTY_MISMATCH_TOLERANCE = 0.02  # wallet vs portfolio.json qty drift allowed
 PAPER_FEE_PCT = 0.0025      # PancakeSwap v2 LP fee
 PAPER_SLIPPAGE_PCT = 0.001  # assumed slippage on top-liquidity pairs
 
+# --- x402 autonomous micropayment (special-prize demo, OFF by default) ---------
+# The agent pays CMC's x402 endpoint $0.01/call to prove autonomous on-chain
+# payment. CMC documents exactly ONE route: USDC on Base via EIP-3009, which is
+# GASLESS (the facilitator submits the transfer; pay-only-on-success). The wallet
+# must hold USDC on Base, funded separately from the BSC trading capital — so
+# x402 spend never touches the judged PnL. Pinned to that route; never spends
+# unless X402_ENABLED, and never past X402_MAX_SPEND_USD.
+X402_INTERVAL_SECONDS = 3600     # one payment/hour (~$1.68 across the 7-day window)
+X402_QUOTE_SYMBOL = "ETH"        # buy a quote for this + cross-check vs the live feed
+X402_QUOTE_URL = ("https://pro-api.coinmarketcap.com/x402/v3/cryptocurrency/"
+                  "quotes/latest?symbol=ETH&convert=USDT")
+X402_NETWORK = "base"                                       # Base (eip155:8453)
+X402_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"   # USDC on Base (6 decimals)
+X402_METHOD = "eip3009"                                     # gasless; no approval tx
+X402_MAX_PAYMENT_ATOMIC = "10000"  # 0.01 USDC @ 6dp — caps auto-approval to the exact charge
+X402_COST_USD = 0.01               # per-call cost, for budget accounting
+# eip3009 settles server-side (no per-call tx hash), so the dashboard links to
+# the payer wallet's USDC transfers on BaseScan as aggregate on-chain proof.
+# Public address; override with X402_PAYER if the wallet changes.
+X402_PAYER = os.getenv("X402_PAYER", "0x1e75d8e9039Cd9DE389CB696df52c46d44c85279")
+
 
 @dataclass
 class Settings:
@@ -126,6 +147,10 @@ class Settings:
     mode: str = field(default_factory=lambda: os.getenv("AGENT_MODE", "paper"))
     poll_interval: int = field(default_factory=lambda: int(os.getenv("POLL_INTERVAL_SECONDS", "60")))
     starting_capital: float = field(default_factory=lambda: float(os.getenv("STARTING_CAPITAL_USDT", "150")))
+    # x402 spends real USDC: opt-in only, hard-capped. Empty/unset env -> disabled.
+    x402_enabled: bool = field(default_factory=lambda:
+                               os.getenv("X402_ENABLED", "").strip().lower() in ("1", "true", "yes", "on"))
+    x402_max_spend_usd: float = field(default_factory=lambda: float(os.getenv("X402_MAX_SPEND_USD", "2.50")))
 
 
 def get_settings() -> Settings:
