@@ -1,7 +1,8 @@
-"""Price history store: SQLite-backed series of sampled quotes per symbol.
+"""Price history store: SQLite-backed series of prices per symbol.
 
-Indicators (RSI/MACD) are computed over this self-built series since the
-free CMC tier has no historical OHLCV endpoint.
+Seeded at startup from CMC hourly OHLCV (runner warm-start) and then extended
+by each live quote sample. Indicators (RSI/MACD/SMA regime) are computed over
+this series; bucketing by bar_seconds collapses it to completed-bar closes.
 """
 
 import sqlite3

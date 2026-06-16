@@ -113,6 +113,39 @@ def _floor_candidate(portfolio: Portfolio, quotes: dict) -> str | None:
                  and portfolio.cash >= size), None)
 
 
+def _warm_start(cmc: CMCClient, store: PriceStore) -> None:
+    """Backfill recent hourly closes so indicators are valid from the first
+    tick instead of after days of self-sampling.
+
+    The strategy needs REGIME_SMA_BARS (120) completed 1h bars for the regime
+    router and MIN_HISTORY bars for MACD; a cold store (fresh start, or a
+    restart after downtime) has neither, leaving the agent effectively blind
+    through the early part of the judged window. Idempotent: closes are written
+    by hour bucket (INSERT OR REPLACE), so re-running only refreshes buckets the
+    live poll will also fill. Pure CMC — the same data path as live — and, being
+    CMC-hosted, it works on the VPS (unlike the old Binance seed-store).
+
+    Never blocks startup: any failure leaves the agent to warm by self-sampling.
+    """
+    need = config.REGIME_SMA_BARS + config.MIN_HISTORY + 10
+    try:
+        series = cmc.ohlcv_historical(config.UNIVERSE, count=need,
+                                      convert=config.QUOTE_ASSET)
+    except Exception as e:  # noqa: BLE001 — backfill is best-effort, not a gate
+        log.warning("warm-start backfill skipped (%s) — indicators will warm "
+                    "by self-sampling", e)
+        return
+    total = 0
+    for sym in config.UNIVERSE:
+        bars = series.get(sym) or []
+        for ts, price in bars:
+            store.append(sym, ts, price)
+        total += len(bars)
+    log.info("warm-start: backfilled %d hourly bars across %d symbols "
+             "(regime router needs %d/symbol)",
+             total, len(config.UNIVERSE), config.REGIME_SMA_BARS)
+
+
 def tick(cmc: CMCClient, store: PriceStore, portfolio: Portfolio,
          risk: RiskEngine, executor: PaperExecutor, journal: Journal,
          strategy_state: review.StrategyState) -> None:
@@ -405,6 +438,10 @@ def main() -> None:
              "strategy %s (size factor %.2f)",
              settings.mode, portfolio.equity(), config.UNIVERSE, settings.poll_interval,
              strategy_state.strategy, strategy_state.size_factor)
+
+    # Warm the indicators from CMC history before the loop so the first ticks
+    # trade on a full regime/MACD window rather than blind through the warm-up.
+    _warm_start(cmc, store)
 
     cmc_down_since: float | None = None
     last_gas_check = time.time()

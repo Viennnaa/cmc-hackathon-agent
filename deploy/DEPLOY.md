@@ -59,13 +59,17 @@ twak wallet address       # -> new BSC funding address, replaces 0x2c90…736F
 #   ANTHROPIC_API_KEY=...         # optional: dashboard narrator
 ```
 
-## 5. Warm up + start
+## 5. Start
+
+The agent warm-starts itself: on boot it backfills ~155 hourly bars per symbol
+from CMC (`runner._warm_start`), so indicators are valid from the first tick —
+no manual seed step, and it works on the VPS (CMC is not geo-blocked). Watch
+for the `warm-start: backfilled N hourly bars …` log line right after start.
 
 ```bash
-~/.local/bin/uv run python -m agent.backtest --days 3 --interval 1h --seed-store
 exit   # back to root
 systemctl start cmc-agent cmc-dashboard
-journalctl -u cmc-agent -f          # expect: "starting in paper mode | …"
+journalctl -u cmc-agent -f          # expect: "starting …" then "warm-start: backfilled …"
 ```
 
 ## 6. Watch the dashboard
@@ -121,15 +125,15 @@ Gotchas learned the hard way (2026-06-12):
      error paths).
   5. **Alert path.** Confirm a Telegram alert arrives (e.g. stop the agent
      with a hand-made `data/pending_order.json` and restart).
-- **Jun 22 before window** — re-run the seed-store warm-up, set
-  `AGENT_MODE=live`, restart, confirm dashboard shows LIVE.
+- **Jun 22 before window** — set `AGENT_MODE=live`, restart, confirm the log
+  shows `warm-start: backfilled …` and the dashboard shows LIVE.
   The laptop stays `AGENT_MODE=paper` for the whole window, and
   `~/.twak/wallet.json` lives on exactly one box (the VPS) — the `live_host`
   guard only catches a *synced* state file; a second box with independent
   state would double-trade the wallet.
-  NOTE: Binance geo-blocks US VPS IPs (HTTP 451), so seed-store must run on
-  the laptop, then: stop cmc-agent on the VPS → rsync `data/prices.sqlite`
-  over → start cmc-agent. (Live CMC sampling on the VPS is unaffected.)
+  (No manual price-store seeding any more: the runner warm-starts from CMC on
+  the VPS itself. The old Binance seed-store + rsync dance is retired — Binance
+  geo-blocked US VPS IPs with HTTP 451; CMC does not.)
 - **Jun 28** — after window close: flatten if holding, stop services, pull
   `data/` back to the laptop for the submission artifacts.
 

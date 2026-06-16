@@ -54,7 +54,7 @@ adaptation layers fix this, both deterministic and fully journaled:
    trailing strategy lost badly, but can never raise a limit — the judged
    risk rules stay immutable. Scorecard journaled as a `self_review` event.
 
-## Backtest findings (Binance klines through the live components)
+## Backtest findings (CMC hourly OHLCV through the live components)
 
 Active trading on 15m bars lost ~10% to fee churn (48 round trips/14d at
 ~0.7% round-trip cost), which set the 1h-bar config. June 2026 bear-tape
@@ -63,10 +63,14 @@ validation (30d @ 1h, equal-weight buy & hold −20.1%): momentum −7.1%
 (DD 3.85%, no kill switch)** — the router's refusal of dead-cat-bounce
 entries is worth ~3 points of return and ~3 of drawdown vs momentum alone.
 
+Data is CMC hourly OHLCV (the Professional tier enabled `ohlcv/historical`),
+the same path the live agent samples and warm-starts from — so the backtest
+validates on the data it actually trades, with no source drift.
+
 ```bash
-uv run python -m agent.backtest --days 30 --interval 1h --strategy adaptive
-uv run python -m agent.backtest --days 30 --interval 1h --fng-compare  # sentiment-rule variants
-uv run python -m agent.backtest --days 3 --interval 1h --seed-store  # pre-warm live indicators
+uv run python -m agent.backtest --days 30 --strategy adaptive
+uv run python -m agent.backtest --days 30 --fng-compare  # sentiment-rule variants
+uv run python -m agent.backtest --days 3 --seed-store     # manual pre-warm (runner also warm-starts on its own)
 ```
 
 Every tick writes a decision record to `data/journal.jsonl`
@@ -92,7 +96,8 @@ stay out of the repo (they narrate deployment internals); the guard tests in
 - [x] Paper-trading loop: CMC quotes + fear&greed → adaptive regime router → risk gates → simulated fills
 - [x] Adaptation layers: per-bar regime router + nightly narrow-only self-review (`data/strategy_state.json`)
 - [x] TWAK execution layer: CLI wrapper, swap quotes verified live, token-risk gate, agent wallet created
-- [x] Backtest harness (Binance klines through the live strategy/risk/execution components)
+- [x] Backtest harness (CMC hourly OHLCV through the live strategy/risk/execution components)
+- [x] Startup warm-start: backfills ~155 hourly bars from CMC so regime/MACD indicators are valid from tick 1 (restart-proof through the live window)
 - [x] BNB AI Agent SDK: ERC-8004 identity — **agentId 1365** on bsc-testnet
       ([tx](https://testnet.bscscan.com/tx/0x401e212d1e58ca4e2f5623cf9494071788f65833fcf9103c3aa65e8002eb2313));
       note: MegaFuel paymaster dropped sponsored txs, registered via `--no-paymaster` + faucet gas

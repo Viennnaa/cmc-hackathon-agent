@@ -1,9 +1,10 @@
 """SENSE layer: CoinMarketCap Data API client.
 
-Free tier gives quotes/latest and fear-and-greed but NOT historical OHLCV,
-so the agent builds its own price series by sampling quotes every poll
-(persisted via PriceStore). If the hackathon grants a higher tier we can
-backfill from /v2/cryptocurrency/ohlcv/historical without touching callers.
+Live trading reads quotes/latest each poll and extends a price series in
+PriceStore. The Professional tier (hackathon grant, 2026-06-16) also enables
+ohlcv/historical, so ohlcv_historical() backfills recent completed hourly
+closes to warm the indicators at startup (runner) and to feed the backtest the
+same data path it trades on. Fear & Greed comes from the v3 endpoint.
 """
 
 import logging
@@ -130,6 +131,58 @@ class CMCClient:
                 percent_change_24h=q.get("percent_change_24h") or 0.0,
                 timestamp=now,
             )
+        return out
+
+    def ohlcv_historical(self, symbols: list[str], count: int,
+                         convert: str = "USDT") -> dict[str, list[tuple[float, float]]]:
+        """Recent completed 1h OHLCV closes per symbol, oldest-first:
+        {sym: [(close_ts, close_price), ...]}.
+
+        One batched call for the whole list. Each bar is a completed hourly
+        candle's close, keyed and ordered so the points drop straight into the
+        same PriceStore hour-buckets the live poll fills — this is how a cold or
+        restarted agent warms its indicators, and how the backtest replays the
+        exact data path it trades on. Symbols CMC has no history for are simply
+        absent from the result.
+
+        Pro tier only: the free tier returns a plan error here, which surfaces
+        as CMCError so callers can fall back to self-sampling.
+        """
+        now = time.time()
+        # Range mode (time_start/time_end) returns every completed hourly bar in
+        # the window; a bare `count` param was observed to return empty/oddly
+        # anchored results, so the window is sized to cover `count` bars + slack.
+        data = self._get(
+            "/v2/cryptocurrency/ohlcv/historical",
+            {
+                "symbol": ",".join(symbols),
+                "convert": convert,
+                "time_period": "hourly",
+                "interval": "1h",
+                "time_start": int(now - (count + 2) * 3600),
+                "time_end": int(now),
+            },
+        )
+        out: dict[str, list[tuple[float, float]]] = {}
+        for sym in symbols:
+            entries = data.get(sym) or []
+            if not entries:
+                continue
+            bars: list[tuple[float, float]] = []
+            for q in entries[0].get("quotes") or []:
+                cell = (q.get("quote") or {}).get(convert) or {}
+                close = cell.get("close")
+                ts = _parse_iso(q.get("time_close"))
+                if ts is None or close is None:
+                    continue
+                close = float(close)
+                # a glitched historical bar must not seed a poisoned baseline
+                if not math.isfinite(close) or close <= 0:
+                    continue
+                bars.append((ts, close))
+            # the API returns oldest-first today; sort so callers never rely on it
+            bars.sort(key=lambda b: b[0])
+            out[sym] = bars
         return out
 
     def fear_and_greed(self) -> int:
