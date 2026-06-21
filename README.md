@@ -1,4 +1,4 @@
-# CMC Hackathon Agent
+# CMC Disciplined Trader
 
 Autonomous BSC trading agent for the CMC × Trust Wallet × BNB Chain hackathon
 (Track 1). Architecture, prize strategy, and timeline: see [PLAN.md](PLAN.md).
