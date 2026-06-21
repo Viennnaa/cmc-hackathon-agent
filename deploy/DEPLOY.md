@@ -148,7 +148,7 @@ in exactly three cases. All three are deliberate; do not blindly restart.
    - trade executed → edit portfolio.json to record it (cash, position),
    - trade absent → no edit needed.
    Then `rm data/pending_order.json` and `systemctl start cmc-agent`.
-2. **`kill switch is engaged`** — the judged −10% drawdown stop fired.
+2. **`kill switch is engaged`** — the judged −25% drawdown stop fired.
    This is permanent for the window by design. Leave it stopped.
 3. **`live reconcile failed`** — fail-closed live startup. One of: wallet
    balance unreadable (fix auth/shape via `twak wallet portfolio`), BNB gas
