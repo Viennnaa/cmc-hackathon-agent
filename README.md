@@ -3,6 +3,9 @@
 Autonomous BSC trading agent for the CMC × Trust Wallet × BNB Chain hackathon
 (Track 1). Architecture, prize strategy, and timeline: see [PLAN.md](PLAN.md).
 
+**Agent wallet (BSC):** `0x1e75d8e9039Cd9DE389CB696df52c46d44c85279` — registered
+on the BNB Hack competition contract; ERC-8004 **agentId 1365** (bsc-testnet).
+
 ```
 SENSE (CMC Data API) → DECIDE (adaptive regime router) → RISK (hard gates)
                      → EXECUTE (paper now, TWAK later) → RECORD (JSONL journal)
@@ -20,22 +23,34 @@ uv run python -m agent.runner          # continuous paper trading
 uv run pytest                          # tests
 ```
 
-## Judged risk rules (immutable, in `src/agent/config.py`)
+## Risk rules & guardrails (in `src/agent/config.py`)
+
+The competition is ranked by **total return**, with two externally-binding
+constraints: a ~30% max-drawdown disqualification gate and a ≥1 trade/UTC-day
+qualification rule. The agent runs aggressively *within* a safety margin of the
+DQ line — the gates below are self-imposed guardrails (they also earn the
+"autonomous execution & guardrails" special-prize points), tuned for a PnL race
+rather than capital preservation.
 
 | Rule | Threshold | Consequence |
 |---|---|---|
-| Position sizing | max 20% of equity | entry rejected/resized |
-| Stop-loss | −3% trigger per trade | forced exit, outranks strategy |
-| Daily loss cap | −5% on the day | flatten all + halt 24h |
-| Kill switch | −10% drawdown from peak | flatten all + permanent stop |
+| Position sizing | max 15% of equity per name | entry rejected/resized |
+| Concurrent positions | up to 6 names (~90% deployed, ~10% reserve) | further entries rejected |
+| Stop-loss | −8% trigger per trade | forced exit, outranks strategy |
+| Daily loss cap | −15% on the day | flatten all + 6h cool-off |
+| Kill switch | −25% drawdown from peak | flatten all + permanent stop (margin under the ~30% DQ gate) |
+| Daily-trade floor | no trade by 22:00 UTC | one minimal compliant swap (ETH, $2) to satisfy the qualification rule |
 | Token risk | TWAK security check (fail closed) | entry vetoed |
-| Re-entry cooldown | 8h after any exit per symbol | entry rejected (anti-churn) |
-| Sentiment veto | CMC Fear & Greed < 20 *or unavailable* | no new entries — enforced in the risk engine for every strategy |
-| Regime filter | CMC 24h change < +1% | no new *momentum* entries (mean-reversion deliberately buys red days; its downside is bounded by the stop-loss and knife filter) |
+| Re-entry cooldown | 1h after any exit per symbol | entry rejected (anti-churn) |
+| Regime router | per-symbol 5-day SMA | downtrend → cash; uptrend → momentum entries; chop → mean-reversion |
 
-Stop-loss note for the replay: −3% is the *trigger*; the realized loss on a
-stopped trade is ~3.4–3.8% after slippage and swap fees. The journal records
-both the trigger decision and the fill.
+Stop-loss note for the replay: −8% is the *trigger*; the realized loss on a
+stopped trade runs slightly higher after slippage and swap fees. The journal
+records both the trigger decision and the fill.
+
+The Fear & Greed < 20 sentiment veto from the conservative build is **disabled
+in the live engine** (a PnL race has to trade through fear) and retained only
+for the `--fng-compare` backtest tool.
 
 ## Adaptation: regime router + nightly self-review
 
@@ -58,10 +73,15 @@ adaptation layers fix this, both deterministic and fully journaled:
 
 Active trading on 15m bars lost ~10% to fee churn (48 round trips/14d at
 ~0.7% round-trip cost), which set the 1h-bar config. June 2026 bear-tape
-validation (30d @ 1h, equal-weight buy & hold −20.1%): momentum −7.1%
-(DD 7.0%), mean_revert −9.9% (DD 10.0%, kill-switched), **adaptive −4.05%
-(DD 3.85%, no kill switch)** — the router's refusal of dead-cat-bounce
-entries is worth ~3 points of return and ~3 of drawdown vs momentum alone.
+validation on the 15-token eligible universe (adaptive, 1h bars): 14d −7.9%
+(DD 9.6%), 30d −15.8% (DD 16.2%), 60d −17.7% (DD 18.8%). Every window stays
+well inside the ~30% drawdown DQ gate with no kill-switch or guardrail firing,
+and 42–169 round trips means the ≥1-trade/day qualification rule is met on its
+own. Long-only spot cannot print a profit in a market falling this hard — the
+win condition is to track-and-cushion the fall, never blow up past the gate,
+qualify on activity, and let the nightly self-review adapt the strategy. The
+regime router's refusal of dead-cat-bounce entries is the edge over
+momentum-alone, which whipsaws harder on the same tape.
 
 Data is CMC hourly OHLCV (the Professional tier enabled `ohlcv/historical`),
 the same path the live agent samples and warm-starts from — so the backtest
@@ -102,7 +122,7 @@ stay out of the repo (they narrate deployment internals); the guard tests in
       ([tx](https://testnet.bscscan.com/tx/0x401e212d1e58ca4e2f5623cf9494071788f65833fcf9103c3aa65e8002eb2313));
       note: MegaFuel paymaster dropped sponsored txs, registered via `--no-paymaster` + faucet gas
 - [x] Observability dashboard: `uv run python -m agent.dashboard` → http://localhost:8765
-- [ ] Mainnet dry-run with ~$20 (Day 8)
-- [ ] Fund the agent wallet with $100–200 + gas BNB — use the address from
-      `twak wallet address` on the VPS (a fresh wallet is created during deploy;
-      see deploy/DEPLOY.md — the original 0x2c90… wallet is retired, do not fund it)
+- [x] Mainnet dry-run: real `twak` swap executed end-to-end (received-amount and on-chain receipt parsing verified)
+- [x] x402 autonomous micropayments: opt-in, gasless USDC-on-Base (EIP-3009) CMC data calls (`src/agent/x402.py`)
+- [x] On-chain competition registration (`twak compete register`)
+- [ ] Top up the agent wallet to the $100 live target + gas BNB before the Jun 22 window
