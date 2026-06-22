@@ -293,7 +293,7 @@ def _refuse_live(msg: str) -> None:
     raise SystemExit(f"live reconcile failed — {msg}")
 
 
-def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
+def _reconcile_live(client, portfolio: Portfolio, journal: Journal, risk: RiskEngine) -> None:
     """Live capital comes from the REAL wallet, never the local file.
 
     Sizing the judged 20%-per-position rule against stale local capital would
@@ -302,7 +302,8 @@ def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
     gas), a wallet that contradicts recorded positions, or a state file that
     was live on another machine (double-trading guard).
     """
-    from agent.execution.twak import WALLET_SYMBOLS, TwakError, find_balance, find_usdt_balance
+    from agent.execution.twak import (WALLET_SYMBOLS, TwakError, find_balance,
+                                       find_usdt_balance, gas_bnb_balance)
 
     host = socket.gethostname()
     if portfolio.mode == "live" and portfolio.live_host and portfolio.live_host != host:
@@ -321,7 +322,7 @@ def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
 
     # Gas check: a stop-loss exit must always be fundable. BNB pays gas, so
     # an empty gas tank means halting while still holding a position.
-    bnb = find_balance(data, WALLET_SYMBOLS["BNB"])
+    bnb = gas_bnb_balance(client)
     if bnb is None or bnb < config.MIN_GAS_BNB_START:
         _refuse_live(f"gas check: BNB balance {bnb} below {config.MIN_GAS_BNB_START} "
                      "minimum — exits would become unfundable mid-window. Fund gas BNB "
@@ -342,6 +343,13 @@ def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
         portfolio.baseline_equity = usdt
         portfolio.live_host = host
         portfolio.mode = "live"
+        # The >=1 trade/day floor must be EARNED on-chain this window, never
+        # inherited from paper history — paper trades call note_trade() too, so
+        # a paper trade earlier today would otherwise leave last_trade_day ==
+        # today and the floor would silently skip, producing a zero-real-trade
+        # UTC day (which the competition DQs).
+        risk.last_trade_day = 0
+        risk.save(RISK_STATE_PATH)
     elif not portfolio.positions:
         if not portfolio.baseline_equity:  # pre-upgrade live state: backfill once
             portfolio.baseline_equity = usdt
@@ -370,9 +378,9 @@ def _reconcile_live(client, portfolio: Portfolio, journal: Journal) -> None:
 
 def _check_gas(client, portfolio: Portfolio, journal: Journal) -> None:
     """Hourly low-gas warning while live; failures never touch trading."""
-    from agent.execution.twak import WALLET_SYMBOLS, find_balance
+    from agent.execution.twak import gas_bnb_balance
     try:
-        bnb = find_balance(client.portfolio(), WALLET_SYMBOLS["BNB"])
+        bnb = gas_bnb_balance(client)
         if bnb is None or bnb < config.LOW_GAS_BNB_WARN:
             msg = (f"low gas: BNB balance {bnb} < {config.LOW_GAS_BNB_WARN} — exits may "
                    "soon be unfundable, top up gas")
@@ -421,7 +429,7 @@ def main() -> None:
         wallet = client.wallet_status()
         log.info("twak auth: %s | wallet: %s", auth, wallet)
         executor = TwakExecutor(client)
-        _reconcile_live(client, portfolio, journal)
+        _reconcile_live(client, portfolio, journal, risk)
     elif settings.mode == "paper":
         executor = PaperExecutor()
         if portfolio.mode != "paper":

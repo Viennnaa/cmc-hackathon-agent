@@ -10,8 +10,9 @@ import pytest
 from agent import config, runner
 from agent.data.cmc import CMCClient
 from agent.execution.portfolio import Portfolio, Position
-from agent.execution.twak import TwakClient, TwakError, _run, find_balance
+from agent.execution.twak import TwakClient, TwakError, _run, find_balance, gas_bnb_balance
 from agent.record.journal import Journal, read_jsonl_tail
+from agent.risk.engine import RiskEngine
 
 PASSWORD = "hunter2-super-secret"
 
@@ -126,18 +127,36 @@ class FakeClient:
 @pytest.fixture
 def isolated_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "PORTFOLIO_PATH", tmp_path / "portfolio.json")
+    monkeypatch.setattr(runner, "RISK_STATE_PATH", tmp_path / "risk_state.json")
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _stub_onchain_gas(monkeypatch):
+    """The gas guard reads BNB on-chain now (twak's native row is unreliable).
+    Keep unit tests hermetic with an adequate default; gas-specific tests
+    override this stub to drive the low-gas / RPC-down paths."""
+    monkeypatch.setattr("agent.execution.twak.onchain_native_bnb",
+                        lambda *a, **k: 0.02)
 
 
 def _journal(tmp_path):
     return Journal(tmp_path / "journal.jsonl", tmp_path / "ledger.jsonl")
 
 
-def test_live_start_refused_without_gas(isolated_paths):
-    client = FakeClient({"tokens": [{"symbol": "USDT", "balance": "20"},
-                                    {"symbol": "BNB", "balance": "0.001"}]})
+def test_live_start_refused_without_gas(isolated_paths, monkeypatch):
+    # gas is read on-chain now; an almost-empty tank must still refuse the start
+    monkeypatch.setattr("agent.execution.twak.onchain_native_bnb", lambda *a, **k: 0.001)
+    client = FakeClient({"tokens": [{"symbol": "USDT", "balance": "20"}]})
     with pytest.raises(SystemExit, match="gas check"):
-        runner._reconcile_live(client, Portfolio(cash=150.0), _journal(isolated_paths))
+        runner._reconcile_live(client, Portfolio(cash=150.0), _journal(isolated_paths), RiskEngine())
+
+
+def test_gas_falls_back_to_twak_when_rpc_down(monkeypatch):
+    # on-chain read returns None (RPC unreachable) -> fall back to twak portfolio
+    monkeypatch.setattr("agent.execution.twak.onchain_native_bnb", lambda *a, **k: None)
+    client = FakeClient({"tokens": [{"symbol": "BNB", "balance": "0.4"}]})
+    assert gas_bnb_balance(client) == 0.4
 
 
 def test_live_start_refused_when_wallet_missing_held_token(isolated_paths):
@@ -146,7 +165,7 @@ def test_live_start_refused_when_wallet_missing_held_token(isolated_paths):
     p = Portfolio(cash=5.0, mode="live")
     p.positions["BTC"] = Position("BTC", 0.0002, 100000.0, 1.0)
     with pytest.raises(SystemExit, match="no BTC balance"):
-        runner._reconcile_live(client, p, _journal(isolated_paths))
+        runner._reconcile_live(client, p, _journal(isolated_paths), RiskEngine())
 
 
 def test_live_restart_accepts_matching_balance(isolated_paths):
@@ -155,24 +174,27 @@ def test_live_restart_accepts_matching_balance(isolated_paths):
                                     {"symbol": "ETH", "balance": "0.01"}]})
     p = Portfolio(cash=5.0, mode="live")
     p.positions["ETH"] = Position("ETH", 0.01, 3000.0, 1.0)
-    runner._reconcile_live(client, p, _journal(isolated_paths))  # no refusal
+    runner._reconcile_live(client, p, _journal(isolated_paths), RiskEngine())  # no refusal
 
 
 def test_live_start_refused_on_other_host(isolated_paths):
     client = FakeClient({})
     p = Portfolio(cash=20.0, mode="live", live_host="some-other-box")
     with pytest.raises(SystemExit, match="double-trade"):
-        runner._reconcile_live(client, p, _journal(isolated_paths))
+        runner._reconcile_live(client, p, _journal(isolated_paths), RiskEngine())
 
 
 def test_live_rebase_records_baseline_and_host(isolated_paths):
     client = FakeClient({"tokens": [{"symbol": "USDT", "balance": "20"},
                                     {"symbol": "BNB", "balance": "0.02"}]})
     p = Portfolio(cash=150.0, mode="paper")
-    runner._reconcile_live(client, p, _journal(isolated_paths))
+    risk = RiskEngine()
+    risk.last_trade_day = 999999  # a paper trade "today" must NOT carry into live
+    runner._reconcile_live(client, p, _journal(isolated_paths), risk)
     assert p.mode == "live"
     assert p.baseline_equity == 20.0
     assert p.live_host != ""
+    assert risk.last_trade_day == 0  # floor must be re-earned on-chain this window
 
 
 def test_find_balance_bnb_and_pegged_symbols():

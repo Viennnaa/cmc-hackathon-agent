@@ -112,6 +112,11 @@ LOW_GAS_BNB_WARN = 0.006         # warn ABOVE the start threshold: top up before
                                  # restart would be refused, not after (no dead zone)
 GAS_CHECK_INTERVAL_SECONDS = 3600
 LIVE_QTY_MISMATCH_TOLERANCE = 0.02  # wallet vs portfolio.json qty drift allowed on restart
+# `twak wallet portfolio` lists ERC20-style tokens and intermittently omits or
+# zeroes the native-BNB row, so it is NOT a reliable gas reading. The gas guard
+# reads BNB on-chain instead (cheap, authoritative); twak is only a fallback.
+# See execution/twak.gas_bnb_balance.
+BSC_RPC_URL = os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org")
 
 # --- Paper execution model ----------------------------------------------------
 PAPER_FEE_PCT = 0.0025      # PancakeSwap v2 LP fee
@@ -137,6 +142,9 @@ X402_COST_USD = 0.01               # per-call cost, for budget accounting
 # the payer wallet's USDC transfers on BaseScan as aggregate on-chain proof.
 # Public address; override with X402_PAYER if the wallet changes.
 X402_PAYER = os.getenv("X402_PAYER", "0x1e75d8e9039Cd9DE389CB696df52c46d44c85279")
+# The trading wallet's public address (the wallet TWAK signs with); used for the
+# on-chain gas-balance read. Defaults to the x402 payer address above.
+WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", X402_PAYER)
 
 
 @dataclass

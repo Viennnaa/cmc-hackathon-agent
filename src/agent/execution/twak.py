@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import time
+import urllib.request
 
 from agent import config
 from agent.execution.paper import Fill
@@ -157,6 +158,39 @@ def find_balance(data, symbols: tuple[str, ...]) -> float | None:
 
 def find_usdt_balance(data) -> float | None:
     return find_balance(data, WALLET_SYMBOLS["USDT"])
+
+
+def onchain_native_bnb(address: str | None = None, rpc_url: str | None = None) -> float | None:
+    """Authoritative native-BNB (gas) balance via eth_getBalance.
+
+    twak's `wallet portfolio` lists ERC20-style tokens and intermittently omits
+    or zeroes the native-BNB row, so find_balance(...,"BNB") is not a reliable
+    gas reading. The chain is. Returns None only when the RPC itself is
+    unreachable or returns garbage, so the caller can fall back."""
+    addr = address or config.WALLET_ADDRESS
+    payload = json.dumps({"jsonrpc": "2.0", "method": "eth_getBalance",
+                          "params": [addr, "latest"], "id": 1}).encode()
+    req = urllib.request.Request(rpc_url or config.BSC_RPC_URL, data=payload,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.load(resp).get("result")
+    except Exception:  # noqa: BLE001 — an RPC miss is a fallback, never fatal
+        return None
+    if not isinstance(result, str) or not result.startswith("0x"):
+        return None
+    return int(result, 16) / 1e18
+
+
+def gas_bnb_balance(client) -> float | None:
+    """BNB gas balance for the live gas guard. On-chain eth_getBalance is the
+    source of truth; twak's portfolio is a fallback only when the RPC is down,
+    because its native-BNB row is unreliable. Returns None only when BOTH the
+    chain and twak fail to produce a balance."""
+    onchain = onchain_native_bnb()
+    if onchain is not None:
+        return onchain
+    return find_balance(client.portfolio(), WALLET_SYMBOLS["BNB"])
 
 
 class TwakClient:
